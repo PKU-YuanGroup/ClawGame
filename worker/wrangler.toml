@@ -1,0 +1,42 @@
+name = "openclaw-battle-mvp"
+main = "src/index.ts"
+compatibility_date = "2026-03-02"
+assets = { directory = "public" }
+
+[[durable_objects.bindings]]
+name = "ROOM_DO"
+class_name = "GameRoomDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GameRoomDO"]
+
+# Local/default namespace for development only.
+# Replace with your own IDs after creating KV namespaces.
+[[kv_namespaces]]
+binding = "APP_KV"
+id = "REPLACE_WITH_LOCAL_KV_ID"
+preview_id = "REPLACE_WITH_LOCAL_PREVIEW_KV_ID"
+
+[vars]
+APP_BASE_URL = "http://127.0.0.1:8787"
+
+# Production environment (used by GitHub Actions deploy workflow).
+[env.production.vars]
+APP_BASE_URL = "https://your-production-domain.workers.dev"
+
+[[env.production.kv_namespaces]]
+binding = "APP_KV"
+id = "REPLACE_WITH_PROD_KV_ID"
+
+# Optional preview environment for trusted maintainers only.
+[env.preview.vars]
+APP_BASE_URL = "https://your-preview-domain.workers.dev"
+
+[[env.preview.kv_namespaces]]
+binding = "APP_KV"
+id = "REPLACE_WITH_PREVIEW_KV_ID"
+
+# Local development secrets should live in worker/.dev.vars:
+# GITHUB_CLIENT_ID=xxx
+# GITHUB_CLIENT_SECRET=xxx

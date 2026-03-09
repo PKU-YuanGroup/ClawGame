@@ -1,0 +1,118 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #020617;
+  --fg: #e2e8f0;
+  --muted: #94a3b8;
+  --surface: #0f172a;
+  --surface-2: #1e293b;
+  --border: #334155;
+  --skeleton: rgba(51, 65, 85, 0.6);
+  --elevated: #111b31;
+  --accent: #f97316;
+}
+
+:root[data-theme="light"] {
+  --bg: #f8fafc;
+  --fg: #0f172a;
+  --muted: #475569;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --border: #cbd5e1;
+  --skeleton: rgba(203, 213, 225, 0.8);
+  --elevated: #ffffff;
+  --accent: #ea580c;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.ui-panel {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 16px;
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.18);
+}
+
+.ui-title {
+  letter-spacing: 0.01em;
+}
+
+/* 兼容现有 Tailwind 深色类，在白天模式下覆盖 */
+:root[data-theme="light"] .text-slate-400 { color: var(--muted) !important; }
+:root[data-theme="light"] .border-slate-700,
+:root[data-theme="light"] .border-slate-800,
+:root[data-theme="light"] .border-slate-800\/80 { border-color: var(--border) !important; }
+:root[data-theme="light"] .bg-slate-900,
+:root[data-theme="light"] .bg-slate-950\/85,
+:root[data-theme="light"] .bg-slate-800,
+:root[data-theme="light"] .bg-slate-800\/80,
+:root[data-theme="light"] .bg-slate-800\/70,
+:root[data-theme="light"] .bg-slate-800\/50,
+:root[data-theme="light"] .bg-slate-700,
+:root[data-theme="light"] .bg-slate-700\/80 { background-color: var(--surface-2) !important; }
+:root[data-theme="light"] .hover\:bg-slate-800:hover,
+:root[data-theme="light"] .hover\:bg-slate-800\/80:hover,
+:root[data-theme="light"] .hover\:bg-slate-700:hover,
+:root[data-theme="light"] .hover\:bg-slate-700\/80:hover { background-color: #e2e8f0 !important; }
+
+.badge-card {
+  border-color: rgb(51 65 85 / 0.7);
+  background-color: rgb(15 23 42 / 0.4);
+  color: rgb(226 232 240);
+}
+
+:root[data-theme="light"] .badge-card {
+  border-color: #cbd5e1;
+  background-color: #ffffff;
+  color: #0f172a;
+}
+
+.board-wrap {
+  border-radius: 16px;
+  padding: 12px;
+  background: linear-gradient(145deg, #2a2f38 0%, #161a22 100%);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.gomoku-board {
+  display: grid;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #d6a66f 0%, #bd8a55 100%);
+  border: 1px solid rgba(64, 44, 24, 0.7);
+}
+
+.gomoku-cell {
+  position: relative;
+  border-right: 1px solid rgba(64, 44, 24, 0.45);
+  border-bottom: 1px solid rgba(64, 44, 24, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stone {
+  width: 74%;
+  height: 74%;
+  border-radius: 999px;
+  box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.15), 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+.stone-black {
+  background: radial-gradient(circle at 35% 30%, #6c6c6c 0%, #1a1a1a 55%, #050505 100%);
+}
+
+.stone-white {
+  background: radial-gradient(circle at 35% 30%, #ffffff 0%, #ececec 60%, #cfcfcf 100%);
+  box-shadow: inset 0 1px 3px rgba(255, 255, 255, 0.9), 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+:root[data-theme="light"] .board-wrap {
+  background: linear-gradient(145deg, #f3f4f6 0%, #e5e7eb 100%);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.15);
+}
+

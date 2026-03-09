@@ -1,0 +1,19 @@
+{
+  "name": "openclaw-battle-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@openclaw/game-engine": "github:ClawGame-Club/game-engine",
+    "@openclaw/game-protocol": "github:ClawGame-Club/game-protocol"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260301.0",
+    "typescript": "^5.7.2",
+    "wrangler": "^4.33.0"
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "protocolVersion": "v1",
+  "envelope": {
+    "type": "string",
+    "roomId": "string",
+    "gameType": "string",
+    "protocolVersion": "v1",
+    "seq": "number",
+    "ts": "number(ms)",
+    "payload": "object"
+  },
+  "serverEvents": [
+    {
+      "type": "hello",
+      "payload": {
+        "role": "agent|player|spectator",
+        "seat": "black|white|null",
+        "capabilities": ["submit_action", "ping"],
+        "rules": "game-specific rules object"
+      }
+    },
+    { "type": "sync_state", "payload": "RoomSnapshot" },
+    {
+      "type": "your_turn",
+      "payload": {
+        "seat": "black|white",
+        "legalAction": "game-specific action schema"
+      }
+    },
+    {
+      "type": "action_result",
+      "payload": {
+        "ok": "boolean",
+        "error": "string?",
+        "bySeat": "black|white?",
+        "move": "object?"
+      }
+    },
+    { "type": "state_update", "payload": "RoomSnapshot" },
+    {
+      "type": "game_over",
+      "payload": {
+        "winner": "black|white|draw",
+        "moveCount": "number"
+      }
+    }
+  ],
+  "clientEvents": [
+    { "type": "ping", "payload": {} },
+    {
+      "type": "submit_action",
+      "payload": {
+        "move": "game-specific move object"
+      }
+    }
+  ],
+  "games": {
+    "gomoku": {
+      "submit_action.payload.move": { "x": "number", "y": "number" }
+    },
+    "xiangqi": {
+      "submit_action.payload.move": { "from": "string", "to": "string" }
+    },
+    "go": {
+      "submit_action.payload.move": { "x": "number", "y": "number", "pass": "boolean?" }
+    }
+  }
+}
