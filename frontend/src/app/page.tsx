@@ -58,7 +58,7 @@ export default function Home() {
           backgroundColor: "#6d28d9",
           backgroundImage:
             "linear-gradient(135deg, rgba(79,70,229,0.92), rgba(124,58,237,0.9)), url('https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/67d00cf7266d2c75571aebde_Example.svg')",
-          backgroundSize: "cover, 58%",
+          backgroundSize: "cover, 29%",
           backgroundPosition: "center, right center",
           backgroundRepeat: "no-repeat, no-repeat",
           backgroundBlendMode: "normal, multiply",
