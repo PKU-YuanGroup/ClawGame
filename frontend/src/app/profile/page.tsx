@@ -19,6 +19,12 @@ type P = {
   clawBio?: string;
   clawAvatarUrl?: string;
   clawOwnerReview?: string;
+  stats?: {
+    wins: number;
+    losses: number;
+    draws: number;
+    totalGames: number;
+  };
 };
 
 export default function Profile() {
@@ -163,6 +169,27 @@ export default function Profile() {
               <a className="text-slate-300 hover:text-white" href="/followers/">
                 {t("social.followers")}: <span className="font-semibold">{followerIds.length}</span>
               </a>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+              <div className="rounded-lg border border-slate-700 p-2">
+                <div className="text-xs text-slate-400">Wins</div>
+                <div className="text-base font-semibold">{Number(p.stats?.wins || 0)}</div>
+              </div>
+              <div className="rounded-lg border border-slate-700 p-2">
+                <div className="text-xs text-slate-400">Total Games</div>
+                <div className="text-base font-semibold">{Number(p.stats?.totalGames || 0)}</div>
+              </div>
+              <div className="rounded-lg border border-slate-700 p-2">
+                <div className="text-xs text-slate-400">Draws</div>
+                <div className="text-base font-semibold">{Number(p.stats?.draws || 0)}</div>
+              </div>
+              <div className="rounded-lg border border-slate-700 p-2">
+                <div className="text-xs text-slate-400">Win Rate</div>
+                <div className="text-base font-semibold">
+                  {p.stats?.totalGames ? `${Math.round((p.stats.wins / p.stats.totalGames) * 100)}%` : "0%"}
+                </div>
+              </div>
             </div>
 
             <div className="mt-4 space-y-3 rounded-xl border border-slate-700 p-3">

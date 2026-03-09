@@ -86,6 +86,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const [leaving, setLeaving] = useState(false);
   const [botJoining, setBotJoining] = useState(false);
   const [botRemoving, setBotRemoving] = useState(false);
+  const joinGameTimerRef = useRef<number | null>(null);
   const joinBotTimerRef = useRef<number | null>(null);
   const removeBotLockRef = useRef(false);
   const removeBotTimerRef = useRef<number | null>(null);
@@ -220,9 +221,14 @@ export function RoomClient({ roomId }: { roomId: string }) {
         w.onclose = () => {
           setWsReady(false);
           setWsLatencyMs(null);
+          setJoining(false);
           setBotJoining(false);
           setBotRemoving(false);
           removeBotLockRef.current = false;
+          if (joinGameTimerRef.current) {
+            window.clearTimeout(joinGameTimerRef.current);
+            joinGameTimerRef.current = null;
+          }
           if (joinBotTimerRef.current) {
             window.clearTimeout(joinBotTimerRef.current);
             joinBotTimerRef.current = null;
@@ -240,9 +246,14 @@ export function RoomClient({ roomId }: { roomId: string }) {
         };
         w.onerror = () => {
           setWsReady(false);
+          setJoining(false);
           setBotJoining(false);
           setBotRemoving(false);
           removeBotLockRef.current = false;
+          if (joinGameTimerRef.current) {
+            window.clearTimeout(joinGameTimerRef.current);
+            joinGameTimerRef.current = null;
+          }
           if (joinBotTimerRef.current) {
             window.clearTimeout(joinBotTimerRef.current);
             joinBotTimerRef.current = null;
@@ -276,9 +287,14 @@ export function RoomClient({ roomId }: { roomId: string }) {
             });
           }
           if (eventType === "error") {
+            setJoining(false);
             setBotJoining(false);
             setBotRemoving(false);
             removeBotLockRef.current = false;
+            if (joinGameTimerRef.current) {
+              window.clearTimeout(joinGameTimerRef.current);
+              joinGameTimerRef.current = null;
+            }
             if (joinBotTimerRef.current) {
               window.clearTimeout(joinBotTimerRef.current);
               joinBotTimerRef.current = null;
@@ -292,6 +308,10 @@ export function RoomClient({ roomId }: { roomId: string }) {
             const payload = (m.payload || {}) as any;
             if (payload.kind === "join_game") {
               setJoining(false);
+              if (joinGameTimerRef.current) {
+                window.clearTimeout(joinGameTimerRef.current);
+                joinGameTimerRef.current = null;
+              }
               if (payload.ok && payload.playerToken) {
                 setPlayerToken(String(payload.playerToken));
                 setJoinRequested(true);
@@ -379,6 +399,10 @@ export function RoomClient({ roomId }: { roomId: string }) {
         window.clearInterval(pingTimerRef.current);
         pingTimerRef.current = null;
       }
+      if (joinGameTimerRef.current) {
+        window.clearTimeout(joinGameTimerRef.current);
+        joinGameTimerRef.current = null;
+      }
       if (joinBotTimerRef.current) {
         window.clearTimeout(joinBotTimerRef.current);
         joinBotTimerRef.current = null;
@@ -426,6 +450,13 @@ export function RoomClient({ roomId }: { roomId: string }) {
       return;
     }
     setJoining(true);
+    if (joinGameTimerRef.current) window.clearTimeout(joinGameTimerRef.current);
+    joinGameTimerRef.current = window.setTimeout(() => {
+      setJoining(false);
+      joinGameTimerRef.current = null;
+      pushToast("Join timeout, please try again.", "error");
+      void refreshRoomPresence();
+    }, 8000);
     ws.send(JSON.stringify({ type: "join_game", payload: { playerId: me.id } }));
   }
 
@@ -599,108 +630,42 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
     if (lang === "en") {
       return [
-        "You are now participating in an OpenClaw competitive game. You must sync with the server via clawgame-cli:",
-        "",
-        "[Environment Variables]",
+        "Quick Start (clawgame-cli)",
         `BASE_URL=${base}`,
         `ROOM_ID=${roomId}`,
         `AGENT_ID=${suggestedAgentId}`,
-        "- AGENT_ID should match the room owner's user id for stable pairing",
         "",
-        "[Install]",
-        "pip install -U \"git+https://github.com/ClawGame-Club/clawgame-cli.git\"",
+        "1) login (wait until match starts)",
+        'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" login --wait-ms 0',
         "",
-        "[Standard Flow (Blocking)]",
-        "1) Login and wait for game start (no timeout)",
-        "clawgame-cli --base-url \"$BASE_URL\" --room-id \"$ROOM_ID\" --agent-id \"$AGENT_ID\" login --wait-ms 0 --msg \"I have joined the game\"",
-        "Notes:",
-        "- login blocks until game starts (no timeout when wait-ms=0)",
-        "- returns seat, rules, opponent player name, opponent OpenClaw name, etc.",
-        "- pass --msg to send one room chat right after login returns",
-        "- if login process is interrupted, CLI will send exit before quitting",
-        "- if player leaves room before start, login returns signal=exit and session should stop",
+        "2) poll loop",
+        'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" poll --wait-ms 25000',
         "",
-        "2) Enter main loop",
-        "clawgame-cli poll --wait-ms 25000",
-        "Notes:",
-        "- poll returns exactly one message each time (queue semantics)",
-        "- blocks when queue is empty",
+        "3) on yourturn -> act once",
+        'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" act --move-json ...',
         "",
-        "3) Handle by message type",
-        "- gameover:",
-        "  - run clawgame-cli exit --wait-ms 20000",
-        "  - if next=end_session: end session",
-        "  - if next=continue_poll: keep polling (rematch)",
-        "- yourturn:",
-        "  - decide one legal move from current state",
-        "  - run clawgame-cli act --move-json ...",
-        "  - optionally run clawgame-cli msg --chat-text ...",
-        "  - continue polling immediately after act",
-        "- chat (server-broadcast chat phase event, not user chatbox noise):",
-        "  - optionally run clawgame-cli msg --chat-text ...",
-        "  - then continue polling",
-        "- state_update / phase_change / system / timeout:",
-        "  - update context and continue polling",
-        "",
-        "[Execution Rules]",
-        "- after each poll, execute exactly one next command",
-        "- each act must be a single legal move",
-        "- if info is insufficient, do not guess; continue polling",
-        "- do not run unrelated extra operations",
-        "- do not end the game proactively unless gameover + exit(end_session)",
+        "4) on gameover -> exit",
+        'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" exit --wait-ms 20000',
       ].join("\n");
     }
 
     return [
-      "你现在正在参与一场 OpenClaw 竞技游戏。你必须通过 clawgame-cli 与服务器同步：",
-      "",
-      "[环境变量]",
+      "快速开始（clawgame-cli）",
       `BASE_URL=${base}`,
       `ROOM_ID=${roomId}`,
       `AGENT_ID=${suggestedAgentId}`,
-      "- AGENT_ID 建议使用房主 user id，便于稳定匹配",
       "",
-      "[安装]",
-      "pip install -U \"git+https://github.com/ClawGame-Club/clawgame-cli.git\"",
+      "1）登录并等待开局",
+      'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" login --wait-ms 0',
       "",
-      "[标准流程（阻塞式）]",
-      "1) 登录并等待开局（不设超时）",
-      "clawgame-cli --base-url \"$BASE_URL\" --room-id \"$ROOM_ID\" --agent-id \"$AGENT_ID\" login --wait-ms 0 --msg \"我已加入对局\"",
-      "说明：",
-      "- login 会阻塞直到游戏开始（wait-ms=0 时不超时）",
-      "- 返回信息包含：座位、规则、对手玩家名、对手 openclaw 名等",
-      "- 可通过 --msg 在 login 返回后自动发一条房间消息",
-      "- 如果 login 进程被中断，CLI 会在退出前发送 exit",
-      "- 如果玩家在开局前离房，login 会返回 signal=exit，本局应结束",
+      "2）进入 poll 循环",
+      'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" poll --wait-ms 25000',
       "",
-      "2) 进入主循环",
-      "clawgame-cli poll --wait-ms 25000",
-      "说明：",
-      "- poll 每次只返回一条消息（队列语义）",
-      "- 队列为空时阻塞等待",
+      "3）收到 yourturn 后执行一步 act",
+      'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" act --move-json ...',
       "",
-      "3) 按消息类型执行",
-      "- gameover：",
-      "  - 执行 clawgame-cli exit --wait-ms 20000",
-      "  - 如果返回 next=end_session：结束会话",
-      "  - 如果返回 next=continue_poll：继续 poll（再来一把）",
-      "- yourturn：",
-      "  - 基于当前 state 执行一步合法动作",
-      "  - 执行 clawgame-cli act --move-json ...",
-      "  - 可选执行 clawgame-cli msg --chat-text ...",
-      "  - act 后立即继续 poll",
-      "- chat（服务器广播的聊天阶段事件，不受普通聊天框噪声影响）：",
-      "  - 可选执行 clawgame-cli msg --chat-text ...",
-      "  - 然后继续 poll",
-      "- state_update / phase_change / system / timeout：",
-      "  - 更新上下文后继续 poll",
-      "",
-      "[执行规范]",
-      "- 每次 poll 返回后，只执行一个下一步命令",
-      "- act 必须是单步合法动作",
-      "- 信息不足时不要臆造，继续 poll 等下一条消息",
-      "- 不要执行与当前消息无关的额外操作",
-      "- 除非收到 gameover + exit(end_session)，否则不要主动结束游戏。",
+      "4）收到 gameover 后执行 exit",
+      'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" exit --wait-ms 20000',
     ].join("\n");
   }, [lang, roomId, me?.id]);
 
@@ -888,7 +853,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
   return (
     <main className="relative grid min-h-[calc(100vh-60px)] grid-cols-1 lg:grid-cols-[320px_1fr_280px]">
-      <aside className={`${chatOpenMobile ? "fixed inset-0 z-30 flex bg-black/50 p-3" : "hidden"} lg:static lg:z-auto lg:flex lg:h-[calc(100vh-60px)] lg:bg-transparent lg:p-3 lg:border-b-0 lg:border-r`}>
+      <aside className={`${chatOpenMobile ? "fixed inset-0 z-30 flex bg-black/50 p-3" : "hidden"} lg:static lg:z-auto lg:flex lg:h-[calc(100vh-60px)] lg:bg-transparent lg:p-3 lg:border-r lg:border-b-0`} style={{ borderColor: "var(--border)" }}>
         <div className="flex h-full w-full flex-col rounded-xl border border-slate-800 bg-[var(--surface)] p-3 lg:h-auto lg:w-auto lg:rounded-none lg:border-0 lg:bg-transparent lg:p-0">
           <div className="mb-2 flex items-center justify-between">
             <b>Room Chat</b>
@@ -990,7 +955,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
           </div>
         </div>
 
-        <div className="ui-panel mb-3 flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-3 py-2" style={{ borderColor: "var(--border)", background: "var(--surface)", boxShadow: "0 4px 10px rgba(2, 6, 23, 0.08)" }}>
           <div className="text-xs" style={{ color: "var(--fg)" }}>{t("room.roomId")}: {roomId} · {gameLabel} · {statusText}</div>
           <div className="flex items-center gap-2">
             <div className="group relative">
@@ -1258,7 +1223,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
         </div>
       </section>
 
-      <aside className="hidden border-t border-slate-800 p-3 lg:block lg:border-t-0 lg:border-l">
+      <aside className="hidden border-t p-3 lg:block lg:border-t-0 lg:border-l" style={{ borderColor: "var(--border)" }}>
         <div className="mb-2 flex items-center justify-between">
           <b>{t("room.online")}</b>
           <span className="text-xs text-slate-400">{allOnlineCount}</span>

@@ -99,7 +99,38 @@ Design intent:
 - OpenClaw side initiates calls to ClawGame APIs.
 - ClawGame acts as passive game service endpoint.
 
-## 5) CI/CD and Deployment Model
+### 4.5 Owner-scoped debug APIs
+
+Debug and orchestration endpoints:
+- `/api/room/join-bot` (owner-only, Bearer token required)
+- `/api/test/fake-room` (Bearer token required, supports modes)
+
+Authorization model:
+- Token source: `/api/me/claw-token` (session-authenticated user)
+- Request header: `Authorization: Bearer <token>`
+- Owner check: token user must match room `ownerId` for owner-only actions
+
+Fake-room modes:
+- `owner_only`
+- `owner_vs_bot`
+- `owner_vs_agent`
+
+## 5) Docs Source of Truth and Sync
+
+Website docs are synchronized from repository docs:
+
+- Source of truth: `docs/website-docs.json`
+- Frontend runtime source: `frontend/public/docs/website-docs.json`
+- Sync command: `scripts/sync-docs-to-frontend.sh`
+
+Update workflow:
+1. Edit `docs/website-docs.json`
+2. Run sync script
+3. Build frontend and deploy worker assets
+
+This keeps docs editable in-repo while ensuring the website and repository stay aligned.
+
+## 6) CI/CD and Deployment Model
 
 Workflows:
 - `.github/workflows/ci.yml`
@@ -114,7 +145,7 @@ Workflows:
 Important implication:
 - Frontend source changes are not live until frontend build output is synced during deploy.
 
-## 6) Important Config Files
+## 7) Important Config Files
 
 - Worker config: `worker/wrangler.toml`
   - `name`, DO bindings, KV bindings, env vars
@@ -123,7 +154,7 @@ Important implication:
 - Main API router: `worker/src/index.ts`
 - Realtime authority: `worker/src/durable-room.ts`
 
-## 7) Design Principles for Future Development
+## 8) Design Principles for Future Development
 
 1. **Agent-first gameplay**
    - Prioritize deterministic and machine-actionable APIs.
@@ -145,7 +176,7 @@ Important implication:
    - Public contributions should not access production secrets.
    - PR CI should validate safely without privileged tokens.
 
-## 8) Fast Debug Playbook for AI
+## 9) Fast Debug Playbook for AI
 
 When something breaks, debug in this order:
 
@@ -170,13 +201,13 @@ When something breaks, debug in this order:
    - Confirm request payloads for agent endpoints match protocol expectations.
    - Check event sequencing (`sinceSeq`, `seq`) for poll loops.
 
-## 9) Known Practical Notes
+## 10) Known Practical Notes
 
 - There is a nested git repo at `python/clawgame_cli` (gitlink/submodule-like behavior). Handle carefully when staging changes.
 - Repository remote has moved to `PKU-YuanGroup/ClawGame`.
 - Docs-only changes are intentionally excluded from CI/deploy triggers.
 
-## 10) Suggested Next Migration Steps (D1-first)
+## 11) Suggested Next Migration Steps (D1-first)
 
 1. Define explicit relational D1 schema for core entities:
 2. Replace transitional `app_kv` bridge with typed relational repositories.

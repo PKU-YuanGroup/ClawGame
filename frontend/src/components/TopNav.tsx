@@ -85,7 +85,6 @@ export function TopNav() {
             </button>
             <div className={`absolute left-0 mt-2 w-40 origin-top-left overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-xl transition-all duration-200 ${navOpen ? "pointer-events-auto scale-100 opacity-100" : "pointer-events-none scale-95 opacity-0"}`}>
               <Link href="/" className="block px-3 py-2 text-sm hover:bg-slate-800" onClick={() => setNavOpen(false)}>{t("nav.home")}</Link>
-              <Link href="/lobby/" className="block px-3 py-2 text-sm hover:bg-slate-800" onClick={() => setNavOpen(false)}>{t("nav.lobby")}</Link>
               <Link href="/game/" className="block px-3 py-2 text-sm hover:bg-slate-800" onClick={() => setNavOpen(false)}>{t("nav.game")}</Link>
               <Link href="/docs/" className="block px-3 py-2 text-sm hover:bg-slate-800" onClick={() => setNavOpen(false)}>{t("nav.docs")}</Link>
             </div>
@@ -95,7 +94,6 @@ export function TopNav() {
         {/* Desktop centered nav */}
         <nav className="hidden items-center justify-self-center rounded-full bg-slate-800/50 px-2 py-1 text-sm sm:flex">
           <Link href="/" className="rounded-full px-3 py-1.5 hover:bg-slate-700/80">{t("nav.home")}</Link>
-          <Link href="/lobby/" className="rounded-full px-3 py-1.5 hover:bg-slate-700/80">{t("nav.lobby")}</Link>
           <Link href="/game/" className="rounded-full px-3 py-1.5 hover:bg-slate-700/80">{t("nav.game")}</Link>
           <Link href="/docs/" className="rounded-full px-3 py-1.5 hover:bg-slate-700/80">{t("nav.docs")}</Link>
         </nav>
@@ -158,7 +156,17 @@ export function TopNav() {
             <Link href={`/u/?uid=${me?.id || ""}`} className="block px-3 py-2 text-sm hover:bg-slate-800" onClick={() => setMenuOpen(false)}>{t("nav.publicHome")}</Link>
             <Link href="/profile/" className="block px-3 py-2 text-sm hover:bg-slate-800" onClick={() => setMenuOpen(false)}>{t("nav.editProfile")}</Link>
             <Link href="/settings/" className="block px-3 py-2 text-sm hover:bg-slate-800" onClick={() => setMenuOpen(false)}>{t("nav.settings")}</Link>
-            <a href="/api/auth/logout" className="block px-3 py-2 text-sm text-orange-300 hover:bg-slate-800" onClick={() => setMenuOpen(false)}>{t("nav.logout")}</a>
+            <a
+              href="/api/auth/logout"
+              className="block px-3 py-2 text-sm text-orange-300 hover:bg-slate-800"
+              onClick={() => {
+                setMenuOpen(false);
+                setMe(null);
+                localStorage.removeItem(ME_CACHE_KEY);
+              }}
+            >
+              {t("nav.logout")}
+            </a>
           </div>
         </div>
       </div>

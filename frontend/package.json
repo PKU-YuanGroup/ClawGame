@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@openclaw/game-protocol": "github:ClawGame-Club/game-protocol",
+    "@openclaw/game-protocol": "file:../packages/game-protocol",
     "next": "15.5.12",
     "react": "19.0.0",
     "react-dom": "19.0.0"

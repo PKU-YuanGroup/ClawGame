@@ -62,6 +62,7 @@ export async function handleAuthRoutes(request: Request, env: Env, url: URL): Pr
       clawBio: "",
       clawAvatarUrl: "",
       clawOwnerReview: "",
+      stats: { wins: 0, losses: 0, draws: 0, totalGames: 0 },
       badges: [],
       updatedAt: Date.now(),
     };
@@ -78,6 +79,7 @@ export async function handleAuthRoutes(request: Request, env: Env, url: URL): Pr
       profile.clawBio = ex.clawBio ?? "";
       profile.clawAvatarUrl = ex.clawAvatarUrl ?? "";
       profile.clawOwnerReview = ex.clawOwnerReview ?? "";
+      profile.stats = ex.stats ?? { wins: 0, losses: 0, draws: 0, totalGames: 0 };
       profile.badges = ex.badges ?? [];
     } else {
       await grantBadgeToUser(env, userId, BADGE_WELCOME);
@@ -98,7 +100,7 @@ export async function handleAuthRoutes(request: Request, env: Env, url: URL): Pr
     return new Response(null, {
       status: 302,
       headers: {
-        Location: `${env.APP_BASE_URL || ""}/lobby`,
+        Location: `${env.APP_BASE_URL || ""}/`,
         "Set-Cookie": sessionCookie(sessionId),
       },
     });

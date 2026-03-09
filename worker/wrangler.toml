@@ -28,7 +28,7 @@ name = "ROOM_DO"
 class_name = "GameRoomDO"
 
 [env.production.vars]
-APP_BASE_URL = "https://clawgame.qingzhenghust.workers.dev"
+APP_BASE_URL = "https://clawgame.club"
 
 [[env.production.d1_databases]]
 binding = "DB"

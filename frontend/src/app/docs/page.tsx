@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type React from "react";
 import { usePageTitle } from "@/hooks/usePageTitle";
 
@@ -12,7 +12,7 @@ type DocSection = {
 
 type TocItem = { id: string; text: string; level: number };
 
-const DOC_SECTIONS: DocSection[] = [
+const DEFAULT_DOC_SECTIONS: DocSection[] = [
   {
     id: "overview",
     title: "Overview",
@@ -191,6 +191,27 @@ function parseToc(markdown: string): TocItem[] {
   return items;
 }
 
+function renderInlineCode(text: string): React.ReactNode[] {
+  const parts = text.split(/(`[^`]+`)/g);
+  return parts.filter((p) => p.length > 0).map((part, idx) => {
+    if (/^`[^`]+`$/.test(part)) {
+      return (
+        <code
+          key={`code_inline_${idx}`}
+          className="rounded px-1 py-0.5"
+          style={{
+            border: "1px solid var(--border)",
+            background: "color-mix(in oklab, var(--surface) 85%, transparent)",
+          }}
+        >
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return <span key={`text_${idx}`}>{part}</span>;
+  });
+}
+
 function renderMarkdown(md: string) {
   const lines = md.split("\n");
   const nodes: React.ReactNode[] = [];
@@ -249,14 +270,18 @@ function renderMarkdown(md: string) {
       }
       nodes.push(
         <ul key={`ul_${i}`} className="my-2 list-disc space-y-1 pl-5 text-sm">
-          {items.map((item, idx) => <li key={`li_${idx}`}>{item}</li>)}
+          {items.map((item, idx) => <li key={`li_${idx}`}>{renderInlineCode(item)}</li>)}
         </ul>,
       );
       continue;
     }
 
     if (line.trim()) {
-      nodes.push(<p key={`p_${i}`} className="mt-2 text-sm leading-6">{line}</p>);
+      nodes.push(
+        <p key={`p_${i}`} className="mt-2 text-sm leading-6">
+          {renderInlineCode(line)}
+        </p>,
+      );
     }
     i += 1;
   }
@@ -266,8 +291,27 @@ function renderMarkdown(md: string) {
 
 export default function DocsPage() {
   usePageTitle("pages.docsTitle");
-  const [active, setActive] = useState(DOC_SECTIONS[0]?.id || "overview");
-  const section = DOC_SECTIONS.find((s) => s.id === active) || DOC_SECTIONS[0];
+  const [sections, setSections] = useState<DocSection[]>(DEFAULT_DOC_SECTIONS);
+  const [active, setActive] = useState(DEFAULT_DOC_SECTIONS[0]?.id || "overview");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/docs/website-docs.json", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled || !Array.isArray(json) || json.length === 0) return;
+        const next = json.filter((x) => x && typeof x.id === "string" && typeof x.title === "string" && typeof x.markdown === "string");
+        if (!next.length) return;
+        setSections(next);
+        setActive((cur) => (next.some((s) => s.id === cur) ? cur : next[0].id));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const section = sections.find((s) => s.id === active) || sections[0];
   const toc = useMemo(() => parseToc(section.markdown), [section]);
 
   return (
@@ -295,11 +339,11 @@ export default function DocsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[230px_minmax(0,1fr)_220px]">
-        <aside className="rounded-2xl border p-3" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[230px_minmax(0,1fr)_220px]">
+        <aside className="self-start rounded-2xl border p-3" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
         <div className="mb-2 text-sm font-semibold">Documentation</div>
         <div className="space-y-1">
-          {DOC_SECTIONS.map((s) => (
+          {sections.map((s) => (
             <button
               key={s.id}
               onClick={() => setActive(s.id)}
@@ -316,7 +360,7 @@ export default function DocsPage() {
         {renderMarkdown(section.markdown)}
       </section>
 
-        <aside className="rounded-2xl border p-3" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
+        <aside className="self-start rounded-2xl border p-3" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
           <div className="mb-2 text-sm font-semibold">On This Page</div>
           <div className="space-y-1 text-sm">
             {toc.length ? toc.map((item) => (

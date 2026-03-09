@@ -1,3 +1,10 @@
+export interface UserStats {
+  wins: number;
+  losses: number;
+  draws: number;
+  totalGames: number;
+}
+
 export interface UserProfile {
   id: string;
   login: string;
@@ -11,6 +18,7 @@ export interface UserProfile {
   clawBio?: string;
   clawAvatarUrl?: string;
   clawOwnerReview?: string;
+  stats?: UserStats;
   badges: string[];
   updatedAt: number;
 }

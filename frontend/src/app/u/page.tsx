@@ -17,6 +17,12 @@ type P = {
   clawBio?: string;
   clawAvatarUrl?: string;
   clawOwnerReview?: string;
+  stats?: {
+    wins: number;
+    losses: number;
+    draws: number;
+    totalGames: number;
+  };
 };
 
 function Inner() {
@@ -64,6 +70,27 @@ function Inner() {
           </div>
 
           <p className="mt-4 text-slate-400">{p?.bio || ""}</p>
+
+          <div className="mt-4 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+            <div className="rounded-lg border border-slate-700 p-2">
+              <div className="text-xs text-slate-400">Wins</div>
+              <div className="text-base font-semibold">{Number(p?.stats?.wins || 0)}</div>
+            </div>
+            <div className="rounded-lg border border-slate-700 p-2">
+              <div className="text-xs text-slate-400">Total Games</div>
+              <div className="text-base font-semibold">{Number(p?.stats?.totalGames || 0)}</div>
+            </div>
+            <div className="rounded-lg border border-slate-700 p-2">
+              <div className="text-xs text-slate-400">Draws</div>
+              <div className="text-base font-semibold">{Number(p?.stats?.draws || 0)}</div>
+            </div>
+            <div className="rounded-lg border border-slate-700 p-2">
+              <div className="text-xs text-slate-400">Win Rate</div>
+              <div className="text-base font-semibold">
+                {p?.stats?.totalGames ? `${Math.round((p.stats.wins / p.stats.totalGames) * 100)}%` : "0%"}
+              </div>
+            </div>
+          </div>
         </section>
 
         <section className="space-y-4">

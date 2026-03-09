@@ -8,8 +8,8 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@openclaw/game-engine": "github:ClawGame-Club/game-engine",
-    "@openclaw/game-protocol": "github:ClawGame-Club/game-protocol"
+    "@openclaw/game-engine": "file:../packages/game-engine",
+    "@openclaw/game-protocol": "file:../packages/game-protocol"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260301.0",

@@ -7,7 +7,7 @@ import { AGENT_EVENT_TYPES } from "./lib/agent-events";
 import { requireUser } from "./lib/user";
 import { storeGet, storeList, storePut } from "./lib/store";
 import type { Env, LeaderboardEntry, UserProfile } from "./types";
-import type { AgentActRequest, AgentJoinRequest, AgentPollRequest } from "@openclaw/game-protocol";
+import { getGameRules, type AgentActRequest, type AgentJoinRequest, type AgentPollRequest } from "@openclaw/game-protocol";
 
 export { GameRoomDO };
 
@@ -78,10 +78,16 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/api/test/fake-room") {
-        const body = (await request.json()) as { gameType?: string; agentA?: string; agentB?: string };
+        const ownerUserId = await requireClawTokenUser(request, env);
+        const body = (await request.json()) as {
+          gameType?: string;
+          agentA?: string;
+          agentB?: string;
+          mode?: "owner_only" | "owner_vs_bot" | "owner_vs_agent";
+        };
         const gameType = String(body.gameType || "gomoku");
-        const agentA = String(body.agentA || "smoke_a");
-        const agentB = String(body.agentB || "smoke_b");
+        const agentA = String(body.agentA || ownerUserId);
+        const mode = String(body.mode || "owner_only");
 
         const roomId = await allocateRoomId(env);
         const visibility: RoomVisibility = "public";
@@ -89,37 +95,54 @@ export default {
 
         const initRes = await stub.fetch("https://room/init", {
           method: "POST",
-          body: JSON.stringify({
-            roomId,
-            gameType,
-            creatorId: `openclaw:${agentA}`,
-            visibility,
-          }),
+          body: JSON.stringify({ roomId, gameType, creatorId: ownerUserId, visibility }),
         });
         const initPayload = await initRes.json<any>();
         if (!initRes.ok) return json(initPayload, initRes.status);
 
-        const joinRes = await stub.fetch("https://room/join", {
+        // Ensure owner user + owner OpenClaw participant both exist for ready-state checks.
+        await stub.fetch("https://room/join", {
           method: "POST",
-          body: JSON.stringify({ playerId: `openclaw:${agentB}` }),
+          body: JSON.stringify({ playerId: ownerUserId }),
         });
-        const joinPayload = await joinRes.json<any>();
-        if (!joinRes.ok) return json(joinPayload, joinRes.status);
-
-        await storePut(env, 
-          `lobby:${roomId}`,
-          JSON.stringify({ roomId, gameType, ownerId: "test", visibility, createdAt: Date.now() }),
-        );
-
-        return json({
-          roomId,
-          gameType,
-          players: [
-            { agentId: agentA, playerId: `openclaw:${agentA}`, seat: initPayload.seat, playerToken: initPayload.playerToken },
-            { agentId: agentB, playerId: `openclaw:${agentB}`, seat: joinPayload.seat, playerToken: joinPayload.playerToken },
-          ],
-          protocolVersion: "v1",
+        const ownerOpenclawRes = await stub.fetch("https://room/join", {
+          method: "POST",
+          body: JSON.stringify({ playerId: `openclaw:${agentA}` }),
         });
+        const ownerOpenclawPayload = await ownerOpenclawRes.json<any>();
+        if (!ownerOpenclawRes.ok) return json(ownerOpenclawPayload, ownerOpenclawRes.status);
+
+        const players: any[] = [
+          {
+            agentId: agentA,
+            playerId: `openclaw:${agentA}`,
+            seat: ownerOpenclawPayload.seat || initPayload.seat,
+            playerToken: ownerOpenclawPayload.playerToken || initPayload.playerToken,
+          },
+        ];
+
+        if (mode === "owner_vs_agent") {
+          const agentB = String(body.agentB || "smoke_b");
+          const joinRes = await stub.fetch("https://room/join", {
+            method: "POST",
+            body: JSON.stringify({ playerId: `openclaw:${agentB}` }),
+          });
+          const joinPayload = await joinRes.json<any>();
+          if (!joinRes.ok) return json(joinPayload, joinRes.status);
+          players.push({ agentId: agentB, playerId: `openclaw:${agentB}`, seat: joinPayload.seat, playerToken: joinPayload.playerToken });
+        } else if (mode === "owner_vs_bot") {
+          const joinBotRes = await stub.fetch("https://room/room/join-bot", {
+            method: "POST",
+            body: JSON.stringify({ requesterId: ownerUserId }),
+          });
+          const joinBotPayload = await joinBotRes.json<any>();
+          if (!joinBotRes.ok) return json(joinBotPayload, joinBotRes.status);
+          players.push({ botId: joinBotPayload.botId, seat: joinBotPayload.seat });
+        }
+
+        await storePut(env, `lobby:${roomId}`, JSON.stringify({ roomId, gameType, ownerId: ownerUserId, visibility, createdAt: Date.now() }));
+
+        return json({ roomId, gameType, mode, players, protocolVersion: "v1" });
       }
 
       if (request.method === "GET" && url.pathname === "/api/lobby/public") {
@@ -250,6 +273,26 @@ export default {
         const res = await stub.fetch("https://room/room/leave", {
           method: "POST",
           body: JSON.stringify({ requesterId: me.userId }),
+        });
+        return passthrough(res);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/room/join-bot") {
+        const body = (await request.json()) as { roomId: string };
+        if (!body.roomId) return json({ error: "roomId is required" }, 400);
+
+        const ownerUserId = await requireClawTokenUser(request, env);
+        const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
+        const stateRes = await stub.fetch("https://room/state");
+        if (!stateRes.ok) return passthrough(stateRes);
+        const state = await stateRes.json<any>();
+        if (String(state?.ownerId || "") !== ownerUserId) {
+          return json({ error: "only room owner can add bot" }, 403);
+        }
+
+        const res = await stub.fetch("https://room/room/join-bot", {
+          method: "POST",
+          body: JSON.stringify({ requesterId: ownerUserId }),
         });
         return passthrough(res);
       }
@@ -409,7 +452,7 @@ export default {
           seat: me?.seat || joinData?.seat || null,
           playerToken: joinData?.playerToken || null,
           status: state?.state?.status || "waiting",
-          rules: describeGameRules(String(state?.gameType || "")),
+          rules: getGameRules(String(state?.gameType || ""), AGENT_EVENT_TYPES),
           players: {
             me: {
               id: myPlayerId,
@@ -497,9 +540,32 @@ export default {
           const nextTurn = String(state?.state?.nextTurn || "");
           const players = Array.isArray(state?.players) ? state.players : [];
           const providedToken = String((body as any).playerToken || "");
-          const me = providedToken
-            ? (players.find((p: any) => p?.token === providedToken) || null)
-            : (players.find((p: any) => p?.id === `openclaw:${body.agentId}`) || null);
+
+          const agentPlayerId = `openclaw:${body.agentId}`;
+          let me = providedToken
+            ? (players.find((p: any) => p?.token === providedToken) || players.find((p: any) => p?.id === agentPlayerId) || null)
+            : (players.find((p: any) => p?.id === agentPlayerId) || null);
+
+          let autoJoinedToken = "";
+          if (!me) {
+            const autoJoinRes = await stub.fetch("https://room/join", {
+              method: "POST",
+              body: JSON.stringify({ playerId: `openclaw:${body.agentId}` }),
+            });
+            if (autoJoinRes.ok) {
+              const autoJoinData = await autoJoinRes.json<any>();
+              autoJoinedToken = String(autoJoinData?.playerToken || "");
+              const latestStateRes = await stub.fetch("https://room/state");
+              if (latestStateRes.ok) {
+                const latestState = await latestStateRes.json<any>();
+                const latestPlayers = Array.isArray(latestState?.players) ? latestState.players : [];
+                me = autoJoinedToken
+                  ? (latestPlayers.find((p: any) => p?.token === autoJoinedToken) || null)
+                  : (latestPlayers.find((p: any) => p?.id === `openclaw:${body.agentId}`) || null);
+              }
+            }
+          }
+
           const yourTurn = Boolean(me?.seat) && status === "playing" && nextTurn === me.seat;
           const gameOver = status === "finished";
 
@@ -592,12 +658,42 @@ export default {
         let moveResult: any = null;
         let chatResult: any = null;
 
-        if (body.move !== undefined) {
-          if (!body.playerToken) return json({ error: "playerToken is required when move is provided" }, 400);
-          const moveRes = await stub.fetch("https://room/move", {
+        const resolveTokenBySender = async (): Promise<string> => {
+          const sender = String(body.senderId || "").trim();
+          if (!sender) return "";
+          const playerId = sender.startsWith("openclaw:") ? sender : `openclaw:${sender}`;
+          const tokenRes = await stub.fetch("https://room/agent/player-token", {
             method: "POST",
-            body: JSON.stringify({ playerToken: body.playerToken, move: body.move }),
+            body: JSON.stringify({ playerId }),
           });
+          if (!tokenRes.ok) return "";
+          const tokenData = await tokenRes.json<any>();
+          return String(tokenData?.playerToken || "");
+        };
+
+        if (body.move !== undefined) {
+          let playerToken = String(body.playerToken || "").trim();
+          if (!playerToken) {
+            playerToken = await resolveTokenBySender();
+          }
+          if (!playerToken) return json({ error: "playerToken is required when move is provided" }, 400);
+
+          let moveRes = await stub.fetch("https://room/move", {
+            method: "POST",
+            body: JSON.stringify({ playerToken, move: body.move }),
+          });
+
+          // Token may be stale after reconnect; refresh by sender id once and retry.
+          if (!moveRes.ok) {
+            const refreshedToken = await resolveTokenBySender();
+            if (refreshedToken && refreshedToken !== playerToken) {
+              moveRes = await stub.fetch("https://room/move", {
+                method: "POST",
+                body: JSON.stringify({ playerToken: refreshedToken, move: body.move }),
+              });
+            }
+          }
+
           if (!moveRes.ok) return passthrough(moveRes);
           moveResult = await moveRes.json<any>();
         }
@@ -674,8 +770,17 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/api/leaderboard/report") {
-        const body = (await request.json()) as { gameType: string; winnerUserId: string; loserUserId: string };
-        await updateLeaderboard(env, body.gameType, body.winnerUserId, body.loserUserId);
+        const body = (await request.json()) as {
+          gameType: string;
+          winnerUserId?: string;
+          loserUserId?: string;
+          draw?: boolean;
+          playerUserIds?: string[];
+        };
+        await updateLeaderboard(env, body.gameType, body.winnerUserId, body.loserUserId, {
+          draw: Boolean(body.draw),
+          playerUserIds: Array.isArray(body.playerUserIds) ? body.playerUserIds.map((x) => String(x || "")).filter(Boolean) : [],
+        });
         return json({ ok: true });
       }
 
@@ -725,81 +830,47 @@ async function allocateRoomId(env: Env): Promise<string> {
   throw new Error("failed to allocate room id");
 }
 
-function describeGameRules(gameType: string): Record<string, unknown> {
-  if (gameType === "gomoku") {
-    return {
-      objective: "five_in_a_row",
-      boardSize: 15,
-      turnOrder: ["black", "white"],
-      phases: ["playing", "finished"],
-      recommendedEvents: ["yourturn", "state_update", "gameover"],
-    };
-  }
-  if (gameType === "go") {
-    return {
-      objective: "territory",
-      boardSize: 19,
-      phases: ["playing", "finished"],
-      recommendedEvents: ["yourturn", "state_update", "gameover"],
-    };
-  }
-  if (gameType === "xiangqi") {
-    return {
-      objective: "checkmate",
-      board: "9x10",
-      phases: ["playing", "finished"],
-      recommendedEvents: ["yourturn", "state_update", "gameover"],
-    };
-  }
-  if (gameType === "chess") {
-    return {
-      objective: "checkmate",
-      board: "8x8",
-      phases: ["playing", "finished"],
-      recommendedEvents: ["yourturn", "state_update", "gameover"],
-    };
-  }
-  if (gameType === "werewolf") {
-    return {
-      objective: "eliminate_opponents",
-      phases: ["night", "day_discussion", "vote", "resolution", "finished"],
-      recommendedEvents: ["phase_change", "private_info", "vote_request", "chat", "gameover"],
-    };
-  }
-  if (gameType === "texas_holdem") {
-    return {
-      objective: "maximize_chip_ev",
-      phases: ["preflop", "flop", "turn", "river", "showdown", "finished"],
-      recommendedEvents: ["phase_change", "private_info", "betting_round", "action_result", "showdown", "gameover"],
-    };
-  }
-  if (gameType === "junqi") {
-    return {
-      objective: "capture_flag",
-      phases: ["deploy", "march", "battle_resolution", "finished"],
-      recommendedEvents: ["phase_change", "private_info", "yourturn", "action_result", "gameover"],
-    };
-  }
-  return {
-    objective: "follow_room_rules",
-    phases: ["waiting", "playing", "finished"],
-    recommendedEvents: AGENT_EVENT_TYPES,
-  };
-}
-
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function updateLeaderboard(env: Env, gameType: string, winnerId: string, loserId: string): Promise<void> {
+async function requireClawTokenUser(request: Request, env: Env): Promise<string> {
+  const auth = String(request.headers.get("authorization") || "").trim();
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  const token = m?.[1]?.trim() || "";
+  if (!token) throw new Error("Unauthorized: missing bearer token");
+
+  const userId = await storeGet(env, `claw-token:${token}`);
+  if (!userId) throw new Error("Unauthorized: invalid or expired token");
+  return String(userId);
+}
+
+async function updateLeaderboard(
+  env: Env,
+  gameType: string,
+  winnerId?: string,
+  loserId?: string,
+  opts: { draw?: boolean; playerUserIds?: string[] } = {},
+): Promise<void> {
   const key = `lb:${gameType}`;
   const list = ((await storeGet(env, key, "json")) as LeaderboardEntry[]) ?? [];
   const map = new Map(list.map((x) => [x.userId, x.rating]));
 
-  const w = map.get(winnerId) ?? 1200;
-  const l = map.get(loserId) ?? 1200;
-  map.set(winnerId, w + 12);
-  map.set(loserId, Math.max(800, l - 10));
+  const draw = Boolean(opts.draw);
+  const playerIds = Array.from(new Set((opts.playerUserIds || []).filter(Boolean)));
+
+  if (!draw && winnerId && loserId && winnerId !== loserId) {
+    const w = map.get(winnerId) ?? 1200;
+    const l = map.get(loserId) ?? 1200;
+    map.set(winnerId, w + 12);
+    map.set(loserId, Math.max(800, l - 10));
+  } else if (draw && playerIds.length === 2) {
+    const [a, b] = playerIds;
+    const ra = map.get(a) ?? 1200;
+    const rb = map.get(b) ?? 1200;
+    map.set(a, ra);
+    map.set(b, rb);
+  }
 
   const sorted = Array.from(map.entries())
     .map(([userId, rating]) => ({ userId, rating }))
@@ -817,6 +888,38 @@ async function updateLeaderboard(env: Env, gameType: string, winnerId: string, l
         profile.updatedAt = Date.now();
         await storePut(env, `user:${entry.userId}`, JSON.stringify(profile));
       }
+    }),
+  );
+
+  const touched = new Set<string>();
+  if (winnerId) touched.add(winnerId);
+  if (loserId) touched.add(loserId);
+  playerIds.forEach((id) => touched.add(id));
+
+  await Promise.all(
+    Array.from(touched).map(async (userId) => {
+      const profile = (await storeGet(env, `user:${userId}`, "json")) as UserProfile | null;
+      if (!profile) return;
+      const stats = profile.stats ?? { wins: 0, losses: 0, draws: 0, totalGames: 0 };
+
+      if (draw) {
+        if (playerIds.includes(userId)) {
+          stats.draws += 1;
+          stats.totalGames += 1;
+        }
+      } else {
+        if (winnerId && userId === winnerId) {
+          stats.wins += 1;
+          stats.totalGames += 1;
+        } else if (loserId && userId === loserId) {
+          stats.losses += 1;
+          stats.totalGames += 1;
+        }
+      }
+
+      profile.stats = stats;
+      profile.updatedAt = Date.now();
+      await storePut(env, `user:${userId}`, JSON.stringify(profile));
     }),
   );
 }

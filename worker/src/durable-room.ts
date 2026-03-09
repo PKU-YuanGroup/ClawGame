@@ -77,11 +77,13 @@ export class GameRoomDO {
       if (request.method === "POST" && url.pathname === "/owner/transfer") return await this.transferOwner(request);
       if (request.method === "POST" && url.pathname === "/room/reset") return await this.resetRoom(request);
       if (request.method === "POST" && url.pathname === "/room/leave") return await this.leaveRoomByRequester(request);
+      if (request.method === "POST" && url.pathname === "/room/join-bot") return await this.joinBotByRequester(request);
       if (request.method === "GET" && url.pathname === "/state") return await this.stateView();
       if (request.method === "GET" && url.pathname === "/online") return await this.onlineView();
       if (request.method === "GET" && url.pathname === "/chat") return await this.chatList();
       if (request.method === "POST" && url.pathname === "/chat") return await this.chatSend(request);
       if (request.method === "POST" && url.pathname === "/agent/touch") return await this.agentTouch();
+      if (request.method === "POST" && url.pathname === "/agent/player-token") return await this.agentPlayerToken(request);
       if (request.method === "GET" && url.pathname === "/ws") return await this.connectWs(request);
       return json({ error: "Not Found" }, 404);
     } catch (err) {
@@ -206,6 +208,16 @@ export class GameRoomDO {
     data.agentLastSeenAt = Date.now();
     await this.save(data);
     return json({ ok: true, ts: data.agentLastSeenAt });
+  }
+
+  private async agentPlayerToken(request: Request): Promise<Response> {
+    const data = await this.requireRoom();
+    const body = (await request.json()) as { playerId?: string };
+    const playerId = String(body?.playerId || "").trim();
+    if (!playerId) return json({ error: "playerId is required" }, 400);
+    const player = data.players.find((p) => p.id === playerId);
+    if (!player) return json({ error: "player not found" }, 404);
+    return json({ ok: true, playerId: player.id, playerToken: player.token, seat: player.seat });
   }
 
   private pruneInactiveAgent(data: RoomData): boolean {
@@ -338,15 +350,19 @@ export class GameRoomDO {
 
     const payloadPlayerId = String(payload?.playerId || "").trim();
     const viewerId = String(meta.viewerId || "").trim();
-    const candidateId = payloadPlayerId || meta.player?.id || viewerId;
+    const defaultId = viewerId && !viewerId.startsWith("guest") ? `openclaw:${viewerId}` : viewerId;
+    const candidateId = payloadPlayerId || meta.player?.id || defaultId;
 
     if (!candidateId || candidateId.startsWith("guest")) {
       ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "join_game", ok: false, error: "login required" })));
       return;
     }
-    if (viewerId && !viewerId.startsWith("guest") && payloadPlayerId && payloadPlayerId !== viewerId) {
-      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "join_game", ok: false, error: "viewer mismatch" })));
-      return;
+    if (viewerId && !viewerId.startsWith("guest") && payloadPlayerId) {
+      const allowedIds = new Set([viewerId, `openclaw:${viewerId}`]);
+      if (!allowedIds.has(payloadPlayerId)) {
+        ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "join_game", ok: false, error: "viewer mismatch" })));
+        return;
+      }
     }
 
     try {
@@ -682,7 +698,10 @@ export class GameRoomDO {
         }
         return false;
       });
-      if (userSocketOnline) ready += 1;
+
+      // For agent-vs-agent/debug flows, a participant with bound OpenClaw seat
+      // should be considered ready even without an active browser socket.
+      if (userSocketOnline || hasOpenclaw) ready += 1;
     }
 
     return ready;
@@ -1091,6 +1110,32 @@ export class GameRoomDO {
     const data = await this.requireRoom();
     await this.removeParticipantById(data, body.requesterId);
     return json({ ok: true });
+  }
+
+  private async joinBotByRequester(request: Request): Promise<Response> {
+    const body = (await request.json()) as { requesterId: string };
+    const requesterId = String(body.requesterId || "").trim();
+    if (!requesterId) throw new Error("requesterId is required");
+
+    const data = await this.requireRoom();
+    if (String(data.ownerId || "") !== requesterId) throw new Error("only owner can add bot");
+    if (String((data.state as any)?.status || "") !== "waiting") throw new Error("can only add bot before game starts");
+    if (data.gameType !== "gomoku") throw new Error("bot not supported for this game yet");
+
+    const existingBotIds = new Set(
+      data.players
+        .map((p) => p.id)
+        .filter((id) => id.startsWith(`bot:${requesterId}:`)),
+    );
+    let index = 1;
+    while (existingBotIds.has(`bot:${requesterId}:${index}`)) index += 1;
+
+    const botUserId = `bot:${requesterId}:${index}`;
+    const botOpenclawId = `openclaw:${botUserId}`;
+    const joined = await this.joinByPlayerId(data, botUserId);
+    await this.joinByPlayerId(data, botOpenclawId);
+    await this.runBotTurns(data);
+    return json({ ok: true, botId: botUserId, seat: joined.seat });
   }
 
   private async move(request: Request): Promise<Response> {

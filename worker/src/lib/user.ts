@@ -20,5 +20,6 @@ export async function getUserProfile(env: Env, userId: string): Promise<UserProf
   if (existing.clawBio === undefined) existing.clawBio = "";
   if (existing.clawAvatarUrl === undefined) existing.clawAvatarUrl = "";
   if (existing.clawOwnerReview === undefined) existing.clawOwnerReview = "";
+  if (!existing.stats) existing.stats = { wins: 0, losses: 0, draws: 0, totalGames: 0 };
   return existing;
 }
