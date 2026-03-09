@@ -2,11 +2,12 @@ import { sessionCookie, type SessionData } from "../lib/auth";
 import { json } from "../lib/http";
 import type { Env, UserProfile } from "../types";
 import { BADGE_WELCOME, ensureBadgeTable, grantBadgeToUser, getUserBadgeIds } from "../lib/badges";
+import { storeDelete, storeGet, storePut } from "../lib/store";
 
 export async function handleAuthRoutes(request: Request, env: Env, url: URL): Promise<Response | null> {
   if (url.pathname === "/api/auth/github/start") {
     const state = crypto.randomUUID();
-    await env.APP_KV.put(`oauth-state:${state}`, "1", { expirationTtl: 600 });
+    await storePut(env, `oauth-state:${state}`, "1", { expirationTtl: 600 });
     const redirect = new URL("https://github.com/login/oauth/authorize");
     redirect.searchParams.set("client_id", env.GITHUB_CLIENT_ID);
     redirect.searchParams.set("scope", "read:user user:email");
@@ -18,9 +19,9 @@ export async function handleAuthRoutes(request: Request, env: Env, url: URL): Pr
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
     if (!code || !state) return json({ error: "missing code/state" }, 400);
-    const okState = await env.APP_KV.get(`oauth-state:${state}`);
+    const okState = await storeGet(env, `oauth-state:${state}`);
     if (!okState) return json({ error: "invalid state" }, 400);
-    await env.APP_KV.delete(`oauth-state:${state}`);
+    await storeDelete(env, `oauth-state:${state}`);
 
     const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
       method: "POST",
@@ -66,7 +67,7 @@ export async function handleAuthRoutes(request: Request, env: Env, url: URL): Pr
     };
 
     await ensureBadgeTable(env);
-    const existing = await env.APP_KV.get(`user:${userId}`, "json");
+    const existing = await storeGet(env, `user:${userId}`, "json");
     if (existing) {
       const ex = existing as UserProfile;
       profile.username = ex.username ?? profile.username;
@@ -82,7 +83,7 @@ export async function handleAuthRoutes(request: Request, env: Env, url: URL): Pr
       await grantBadgeToUser(env, userId, BADGE_WELCOME);
     }
     profile.badges = await getUserBadgeIds(env, userId);
-    await env.APP_KV.put(`user:${userId}`, JSON.stringify(profile));
+    await storePut(env, `user:${userId}`, JSON.stringify(profile));
 
     const sessionId = crypto.randomUUID();
     const session: SessionData = {
@@ -92,7 +93,7 @@ export async function handleAuthRoutes(request: Request, env: Env, url: URL): Pr
       avatarUrl: profile.avatarUrl,
       name: profile.name,
     };
-    await env.APP_KV.put(`session:${sessionId}`, JSON.stringify(session), { expirationTtl: 60 * 60 * 24 * 30 });
+    await storePut(env, `session:${sessionId}`, JSON.stringify(session), { expirationTtl: 60 * 60 * 24 * 30 });
 
     return new Response(null, {
       status: 302,

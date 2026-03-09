@@ -5,6 +5,7 @@ import { handleProfileRoutes } from "./routes/profile";
 import { json, passthrough, shortCode, wsBaseFromRequest } from "./lib/http";
 import { AGENT_EVENT_TYPES } from "./lib/agent-events";
 import { requireUser } from "./lib/user";
+import { storeGet, storeList, storePut } from "./lib/store";
 import type { Env, LeaderboardEntry, UserProfile } from "./types";
 import type { AgentActRequest, AgentJoinRequest, AgentPollRequest } from "@openclaw/game-protocol";
 
@@ -55,7 +56,7 @@ export default {
         const payload = await res.json<any>();
         if (!res.ok) return json(payload, res.status);
 
-        await env.APP_KV.put(
+        await storePut(env, 
           `lobby:${roomId}`,
           JSON.stringify({ roomId, gameType: body.gameType, ownerId: me.userId, visibility, inviteCode, createdAt: Date.now() }),
         );
@@ -105,7 +106,7 @@ export default {
         const joinPayload = await joinRes.json<any>();
         if (!joinRes.ok) return json(joinPayload, joinRes.status);
 
-        await env.APP_KV.put(
+        await storePut(env, 
           `lobby:${roomId}`,
           JSON.stringify({ roomId, gameType, ownerId: "test", visibility, createdAt: Date.now() }),
         );
@@ -123,17 +124,17 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/api/lobby/public") {
         const gameType = url.searchParams.get("gameType");
-        const list = await env.APP_KV.list({ prefix: "lobby:" });
-        const rooms = await Promise.all(list.keys.map(async (k) => (await env.APP_KV.get(k.name, "json")) as any));
+        const list = await storeList(env, { prefix: "lobby:" });
+        const rooms = await Promise.all(list.keys.map(async (k) => (await storeGet(env, k.name, "json")) as any));
         return json(rooms.filter((r) => r?.visibility === "public" && (!gameType || r.gameType === gameType)));
       }
 
       if (request.method === "GET" && url.pathname === "/api/matches/live") {
         const gameType = url.searchParams.get("gameType");
-        const list = await env.APP_KV.list({ prefix: "lobby:" });
+        const list = await storeList(env, { prefix: "lobby:" });
         const rooms = await Promise.all(
           list.keys.map(async (k) => {
-            const v = (await env.APP_KV.get(k.name, "json")) as any;
+            const v = (await storeGet(env, k.name, "json")) as any;
             if (!v || v.visibility !== "public") return null;
             if (gameType && v.gameType !== gameType) return null;
             const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(v.roomId));
@@ -170,7 +171,7 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/match/join") {
         const me = await requireUser(request, env);
         const body = (await request.json()) as { roomId: string; inviteCode?: string };
-        const lobby = (await env.APP_KV.get(`lobby:${body.roomId}`, "json")) as any;
+        const lobby = (await storeGet(env, `lobby:${body.roomId}`, "json")) as any;
         if (!lobby) return json({ error: "room not found" }, 404);
         if (lobby.visibility === "private" && lobby.inviteCode !== body.inviteCode) return json({ error: "invalid invite code" }, 403);
 
@@ -260,26 +261,26 @@ export default {
         if (!target) return json({ error: "targetUserId is required" }, 400);
         if (target === me.userId) return json({ error: "cannot follow yourself" }, 400);
         const key = `follow:following:${me.userId}`;
-        const current = ((await env.APP_KV.get(key, "json")) as string[] | null) || [];
+        const current = ((await storeGet(env, key, "json")) as string[] | null) || [];
         const next = body.follow === false ? current.filter((id) => id !== target) : Array.from(new Set([...current, target]));
-        await env.APP_KV.put(key, JSON.stringify(next));
+        await storePut(env, key, JSON.stringify(next));
         return json({ ok: true, following: next });
       }
 
       if (request.method === "GET" && url.pathname === "/api/social/following") {
         const me = await requireUser(request, env);
         const key = `follow:following:${me.userId}`;
-        const following = ((await env.APP_KV.get(key, "json")) as string[] | null) || [];
+        const following = ((await storeGet(env, key, "json")) as string[] | null) || [];
         return json({ following });
       }
 
       if (request.method === "GET" && url.pathname === "/api/social/followers") {
         const me = await requireUser(request, env);
-        const list = await env.APP_KV.list({ prefix: "follow:following:" });
+        const list = await storeList(env, { prefix: "follow:following:" });
         const followers: string[] = [];
         for (const k of list.keys) {
           const fromUser = k.name.replace("follow:following:", "");
-          const arr = ((await env.APP_KV.get(k.name, "json")) as string[] | null) || [];
+          const arr = ((await storeGet(env, k.name, "json")) as string[] | null) || [];
           if (arr.includes(me.userId)) followers.push(fromUser);
         }
         return json({ followers });
@@ -288,10 +289,10 @@ export default {
       if (request.method === "GET" && url.pathname === "/api/social/followers-count") {
         const me = await requireUser(request, env);
         const targetUserId = String(url.searchParams.get("userId") || me.userId);
-        const list = await env.APP_KV.list({ prefix: "follow:following:" });
+        const list = await storeList(env, { prefix: "follow:following:" });
         let count = 0;
         for (const k of list.keys) {
-          const arr = ((await env.APP_KV.get(k.name, "json")) as string[] | null) || [];
+          const arr = ((await storeGet(env, k.name, "json")) as string[] | null) || [];
           if (arr.includes(targetUserId)) count += 1;
         }
         return json({ userId: targetUserId, followersCount: count });
@@ -301,7 +302,7 @@ export default {
         const body = (await request.json()) as AgentJoinRequest;
         if (!body.roomId) return json({ error: "roomId is required" }, 400);
         if (!body.agentId) return json({ error: "agentId is required" }, 400);
-        const lobby = (await env.APP_KV.get(`lobby:${body.roomId}`, "json")) as any;
+        const lobby = (await storeGet(env, `lobby:${body.roomId}`, "json")) as any;
         if (!lobby) return json({ error: "room not found" }, 404);
         if (lobby.visibility === "private" && lobby.inviteCode !== body.inviteCode) return json({ error: "invalid invite code" }, 403);
 
@@ -388,7 +389,7 @@ export default {
         for (const p of players) {
           const key = p?.id?.startsWith("openclaw:") ? p.id.slice("openclaw:".length) : p?.id;
           if (!key) continue;
-          profileById[p.id] = (await env.APP_KV.get(`user:${key}`, "json")) || {};
+          profileById[p.id] = (await storeGet(env, `user:${key}`, "json")) || {};
         }
 
         const normalizeParticipantId = (id: string) => (id.startsWith("openclaw:") ? id.slice("openclaw:".length) : id);
@@ -581,7 +582,7 @@ export default {
         const actionId = String(body.actionId || "").trim();
         const dedupeKey = actionId ? `agent:act:${body.roomId}:${actionId}` : "";
         if (dedupeKey) {
-          const existed = await env.APP_KV.get(dedupeKey, "json");
+          const existed = await storeGet(env, dedupeKey, "json");
           if (existed) return json(existed);
         }
 
@@ -621,7 +622,7 @@ export default {
 
         const result = { protocolVersion: "v1", roomId: body.roomId, actionId: actionId || undefined, move: moveResult, chat: chatResult };
         if (dedupeKey) {
-          await env.APP_KV.put(dedupeKey, JSON.stringify(result), { expirationTtl: 60 * 60 });
+          await storePut(env, dedupeKey, JSON.stringify(result), { expirationTtl: 60 * 60 });
         }
         return json(result);
       }
@@ -668,7 +669,7 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/api/leaderboard") {
         const gameType = url.searchParams.get("gameType") || "gomoku";
-        const data = ((await env.APP_KV.get(`lb:${gameType}`, "json")) as LeaderboardEntry[]) ?? [];
+        const data = ((await storeGet(env, `lb:${gameType}`, "json")) as LeaderboardEntry[]) ?? [];
         return json(data.slice(0, 100));
       }
 
@@ -718,7 +719,7 @@ function randomRoomId(): string {
 async function allocateRoomId(env: Env): Promise<string> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const roomId = randomRoomId();
-    const exists = await env.APP_KV.get(`lobby:${roomId}`);
+    const exists = await storeGet(env, `lobby:${roomId}`);
     if (!exists) return roomId;
   }
   throw new Error("failed to allocate room id");
@@ -792,7 +793,7 @@ async function sleep(ms: number): Promise<void> {
 
 async function updateLeaderboard(env: Env, gameType: string, winnerId: string, loserId: string): Promise<void> {
   const key = `lb:${gameType}`;
-  const list = ((await env.APP_KV.get(key, "json")) as LeaderboardEntry[]) ?? [];
+  const list = ((await storeGet(env, key, "json")) as LeaderboardEntry[]) ?? [];
   const map = new Map(list.map((x) => [x.userId, x.rating]));
 
   const w = map.get(winnerId) ?? 1200;
@@ -804,17 +805,17 @@ async function updateLeaderboard(env: Env, gameType: string, winnerId: string, l
     .map(([userId, rating]) => ({ userId, rating }))
     .sort((a, b) => b.rating - a.rating);
 
-  await env.APP_KV.put(key, JSON.stringify(sorted));
+  await storePut(env, key, JSON.stringify(sorted));
 
   await Promise.all(
     sorted.slice(0, 100).map(async (entry, idx) => {
-      const profile = (await env.APP_KV.get(`user:${entry.userId}`, "json")) as UserProfile | null;
+      const profile = (await storeGet(env, `user:${entry.userId}`, "json")) as UserProfile | null;
       if (!profile) return;
       const badge = `${gameType}榜 #${idx + 1}`;
       if (!profile.badges.includes(badge)) {
         profile.badges = [...profile.badges, badge].slice(-20);
         profile.updatedAt = Date.now();
-        await env.APP_KV.put(`user:${entry.userId}`, JSON.stringify(profile));
+        await storePut(env, `user:${entry.userId}`, JSON.stringify(profile));
       }
     }),
   );

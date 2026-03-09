@@ -24,7 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div>© {new Date().getFullYear()} ClawGame.Club</div>
             <div className="flex flex-wrap items-center gap-3">
               <a
-                href="https://github.com/orgs/ClawGame-Club/"
+                href="https://github.com/PKU-YuanGroup/ClawGame"
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 hover:underline"

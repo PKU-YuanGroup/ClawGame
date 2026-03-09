@@ -11,12 +11,10 @@ class_name = "GameRoomDO"
 tag = "v1"
 new_sqlite_classes = ["GameRoomDO"]
 
-# Local/default namespace for development only.
-# Replace with your own IDs after creating KV namespaces.
-[[kv_namespaces]]
-binding = "APP_KV"
-id = "REPLACE_WITH_LOCAL_KV_ID"
-preview_id = "REPLACE_WITH_LOCAL_PREVIEW_KV_ID"
+[[d1_databases]]
+binding = "DB"
+database_name = "clawgame"
+database_id = "REPLACE_WITH_LOCAL_D1_DATABASE_ID"
 
 [vars]
 APP_BASE_URL = "http://127.0.0.1:8787"
@@ -32,9 +30,10 @@ class_name = "GameRoomDO"
 [env.production.vars]
 APP_BASE_URL = "https://clawgame.qingzhenghust.workers.dev"
 
-[[env.production.kv_namespaces]]
-binding = "APP_KV"
-id = "62ba1ce0db844016a33514835ed85511"
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "clawgame"
+database_id = "f717ff98-9acc-42f2-97ff-d2143d8a6fa0"
 
 # Optional preview environment for trusted maintainers only.
 [env.preview]
@@ -43,9 +42,10 @@ name = "clawgame-preview"
 [env.preview.vars]
 APP_BASE_URL = "https://clawgame-preview.qingzhenghust.workers.dev"
 
-[[env.preview.kv_namespaces]]
-binding = "APP_KV"
-id = "REPLACE_WITH_PREVIEW_KV_ID"
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "clawgame-preview"
+database_id = "REPLACE_WITH_PREVIEW_D1_DATABASE_ID"
 
 # Local development secrets should live in worker/.dev.vars:
 # GITHUB_CLIENT_ID=xxx

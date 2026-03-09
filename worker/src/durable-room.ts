@@ -2,6 +2,7 @@ import { getEngine } from "./games/registry";
 import type { MatchPlayer, MatchState, Seat } from "./games/types";
 import type { Env } from "./types";
 import type { ProtocolEnvelope } from "@openclaw/game-protocol";
+import { storeDelete } from "./lib/store";
 
 export type RoomVisibility = "public" | "private";
 
@@ -138,7 +139,7 @@ export class GameRoomDO {
     const data = await this.load();
     if (!data) return;
     await this.state.storage.delete(ROOM_KEY);
-    await this.env.APP_KV.delete(`lobby:${data.roomId}`);
+    await storeDelete(this.env, `lobby:${data.roomId}`);
   }
 
   private async cleanupWhenRoomEmpty(): Promise<void> {
@@ -503,7 +504,7 @@ export class GameRoomDO {
 
       if (data.players.length === 0) {
         // Keep an empty room snapshot for connected spectators; cleanup runs when sockets drain.
-        await this.env.APP_KV.delete(`lobby:${data.roomId}`);
+        await storeDelete(this.env, `lobby:${data.roomId}`);
       }
       await this.save(data);
       this.broadcast(data, "state_update", this.toSnapshot(data));
@@ -856,7 +857,7 @@ export class GameRoomDO {
 
     if (data.players.length === 0) {
       // Keep an empty room snapshot for connected spectators; cleanup runs when sockets drain.
-      await this.env.APP_KV.delete(`lobby:${data.roomId}`);
+      await storeDelete(this.env, `lobby:${data.roomId}`);
     }
 
     await this.save(data);

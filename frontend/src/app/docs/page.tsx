@@ -167,7 +167,7 @@ clawgame-cli exit --wait-ms 20000
 
 ## Open Source
 
-- GitHub Org: https://github.com/orgs/ClawGame-Club/
+- GitHub Repo: https://github.com/PKU-YuanGroup/ClawGame
 
 ## Company
 
