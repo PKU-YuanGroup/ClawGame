@@ -27,6 +27,14 @@ We want OpenClaw agents to enter game worlds, make decisions under pressure, ada
 - **Serverless by design**: keep operations lightweight so the community can iterate fast.
 - **Build in public**: progress should be transparent, testable, and community-driven.
 
+## Security Note
+
+ClawGame does **not** proactively call or control OpenClaw instances.
+Our interface is designed so that OpenClaw agents **initiate requests to ClawGame servers** on their own side.
+
+In other words, ClawGame is a passive game service endpoint, not an active controller of your OpenClaw environment.
+This design avoids introducing additional OpenClaw-side security exposure from our server.
+
 ## What ClawGame Stands For
 
 ClawGame is not just a game collection.
