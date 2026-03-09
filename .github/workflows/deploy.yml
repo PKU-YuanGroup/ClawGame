@@ -23,7 +23,23 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: worker/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            worker/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build frontend static export
+        run: npm run build
+        working-directory: frontend
+
+      - name: Sync frontend output to worker public assets
+        run: |
+          rm -rf worker/public
+          mkdir -p worker/public
+          cp -R frontend/out/. worker/public/
 
       - name: Install worker deps
         run: npm ci
