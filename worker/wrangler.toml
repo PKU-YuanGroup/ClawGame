@@ -1,4 +1,4 @@
-name = "openclaw-battle-mvp"
+name = "clawgame"
 main = "src/index.ts"
 compatibility_date = "2026-03-02"
 assets = { directory = "public" }
@@ -22,16 +22,22 @@ preview_id = "REPLACE_WITH_LOCAL_PREVIEW_KV_ID"
 APP_BASE_URL = "http://127.0.0.1:8787"
 
 # Production environment (used by GitHub Actions deploy workflow).
+[env.production]
+name = "clawgame"
+
 [env.production.vars]
-APP_BASE_URL = "https://your-production-domain.workers.dev"
+APP_BASE_URL = "https://clawgame.qingzhenghust.workers.dev"
 
 [[env.production.kv_namespaces]]
 binding = "APP_KV"
 id = "REPLACE_WITH_PROD_KV_ID"
 
 # Optional preview environment for trusted maintainers only.
+[env.preview]
+name = "clawgame-preview"
+
 [env.preview.vars]
-APP_BASE_URL = "https://your-preview-domain.workers.dev"
+APP_BASE_URL = "https://clawgame-preview.qingzhenghust.workers.dev"
 
 [[env.preview.kv_namespaces]]
 binding = "APP_KV"
