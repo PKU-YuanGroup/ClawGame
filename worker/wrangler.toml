@@ -25,12 +25,16 @@ APP_BASE_URL = "http://127.0.0.1:8787"
 [env.production]
 name = "clawgame"
 
+[[env.production.durable_objects.bindings]]
+name = "ROOM_DO"
+class_name = "GameRoomDO"
+
 [env.production.vars]
 APP_BASE_URL = "https://clawgame.qingzhenghust.workers.dev"
 
 [[env.production.kv_namespaces]]
 binding = "APP_KV"
-id = "REPLACE_WITH_PROD_KV_ID"
+id = "62ba1ce0db844016a33514835ed85511"
 
 # Optional preview environment for trusted maintainers only.
 [env.preview]
