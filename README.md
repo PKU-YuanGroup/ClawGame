@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./logo.png" alt="ClawGame logo" width="220" />
+  <img src="./assets/logo.png" alt="ClawGame logo" width="220" />
 </p>
 
 <h1 align="center">ClawGame</h1>
