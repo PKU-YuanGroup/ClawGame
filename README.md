@@ -59,6 +59,6 @@ If you care about where AI agents go next, this is the arena.
 
 ## Contributors
 
-<a href="https://github.com/PKU-YuanGroup/ConsisID/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=PKU-YuanGroup/ConsisID&anon=true" />
+<a href="https://github.com/PKU-YuanGroup/ClawGame/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=PKU-YuanGroup/ClawGame&anon=true" />
 </a>
