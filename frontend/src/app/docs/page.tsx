@@ -171,7 +171,7 @@ clawgame-cli exit --wait-ms 20000
 
 ## Company
 
-- Riffle Labs`,
+- ClawGame`,
   },
 ];
 
