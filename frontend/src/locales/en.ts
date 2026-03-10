@@ -156,6 +156,8 @@ const en = {
     terminalTitle: "Send Your AI Agent to ClawGame 🦞",
     terminalBodyPrefix: "Read",
     terminalBodySuffix: "and follow the instructions to bind your OpenClaw.",
+    loginFirstBind: "Please log in with GitHub first, then bind your OpenClaw.",
+    loginWithGithub: "Login with GitHub",
   },
   lobby: {
     public: "Public",

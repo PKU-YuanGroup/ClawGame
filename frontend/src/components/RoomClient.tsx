@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, API_BASE } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { getGameLabel } from "@/lib/game-library";
+import { getGameLabel, getGameTheme } from "@/lib/game-library";
 import type { ProtocolEnvelope } from "@openclaw/game-protocol";
 
 type ChatMessage = {
@@ -63,6 +63,38 @@ function normalizeProfileId(id?: string) {
 function isBotId(id?: string) {
   return Boolean(id && (id.startsWith("bot:") || id.startsWith("openclaw:bot:")));
 }
+
+const CHESS_GLYPHS: Record<string, string> = {
+  black_king: "♚",
+  black_queen: "♛",
+  black_rook: "♜",
+  black_bishop: "♝",
+  black_knight: "♞",
+  black_pawn: "♟",
+  white_king: "♔",
+  white_queen: "♕",
+  white_rook: "♖",
+  white_bishop: "♗",
+  white_knight: "♘",
+  white_pawn: "♙",
+};
+
+const XIANGQI_GLYPHS: Record<string, string> = {
+  black_general: "将",
+  black_advisor: "士",
+  black_elephant: "象",
+  black_horse: "马",
+  black_rook: "车",
+  black_cannon: "炮",
+  black_soldier: "卒",
+  white_general: "帅",
+  white_advisor: "仕",
+  white_elephant: "相",
+  white_horse: "马",
+  white_rook: "车",
+  white_cannon: "炮",
+  white_soldier: "兵",
+};
 
 export function RoomClient({ roomId }: { roomId: string }) {
   const [me, setMe] = useState<Me | null>(null);
@@ -351,8 +383,14 @@ export function RoomClient({ roomId }: { roomId: string }) {
               let moveText = "-";
               if (typeof payload.move?.x === "number" && typeof payload.move?.y === "number") {
                 moveText = `(${payload.move.x + 1}, ${payload.move.y + 1})`;
+              } else if (typeof payload.move?.from === "string" && typeof payload.move?.to === "string") {
+                moveText = `${payload.move.from} -> ${payload.move.to}`;
+              } else if (typeof payload.move?.action === "string") {
+                moveText = payload.move.amount ? `${payload.move.action} ${payload.move.amount}` : payload.move.action;
               } else if (typeof payload.move === "string") {
                 moveText = payload.move;
+              } else {
+                moveText = JSON.stringify(payload.move);
               }
               const entry = {
                 id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -731,9 +769,12 @@ export function RoomClient({ roomId }: { roomId: string }) {
   )).map((id: string) => ({ id }));
   const gameType = snapshot?.gameType || gameState?.gameType || "gomoku";
   const gameLabel = getGameLabel(gameType, lang);
-  const supportsBot = gameType === "gomoku";
-  const boardSize = Number(gameState?.size || 15);
+  const gameTheme = getGameTheme(gameType);
+  const supportsBot = ["gomoku", "go", "xiangqi", "chess", "texas_holdem", "werewolf", "junqi", "who_is_undercover"].includes(gameType);
+  const boardSize = Number(gameState?.size || gameState?.boardSize || (Array.isArray(gameState?.board) ? gameState.board.length : 15));
   const board = Array.isArray(gameState?.board) ? gameState.board : [];
+  const boardHeight = Number(gameState?.height || board.length || boardSize);
+  const boardWidth = Number(gameState?.width || board[0]?.length || boardSize);
   const statusText = gameState?.status || "waiting";
   const isGameFinished = statusText === "finished" || Boolean((gameState as any)?.winner) || Boolean(gameOverWinner);
   const turnText = gameState?.nextTurn || "-";
@@ -745,7 +786,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
       return acc;
     }, {})
     : {};
-  const hasOpenclawSeat = Boolean(openclawBySeat.black || openclawBySeat.white);
+  const hasOpenclawSeat = Object.keys(openclawBySeat).length > 0;
   const clockState = (gameState as any)?.clock || {};
   const clockRemaining = clockState?.remainingMs || {};
   const turnStartedAt = Number(clockState?.turnStartedAt || 0);
@@ -810,6 +851,8 @@ export function RoomClient({ roomId }: { roomId: string }) {
     { key: "status", label: "Status", value: statusText },
     { key: "turn", label: "Turn", value: `${turnPlayerName} (${turnText})` },
   ];
+  const genericSeatList: string[] = Array.from(new Set((Array.isArray(snapshot?.players) ? snapshot.players : []).map((p: any) => String(p?.seat || "")).filter(Boolean)));
+  const isDuelHud = genericSeatList.length <= 2 && genericSeatList.every((seat) => seat === "black" || seat === "white");
 
   useEffect(() => {
     if (statusText !== "playing") return;
@@ -835,6 +878,61 @@ export function RoomClient({ roomId }: { roomId: string }) {
     if (v === "black") return <span className="stone stone-black" />;
     if (v === "white") return <span className="stone stone-white" />;
     return null;
+  }
+
+  function renderPiece(v: unknown, kind: "chess" | "xiangqi") {
+    const key = String(v || "");
+    if (!key) return null;
+    const glyph = kind === "chess" ? CHESS_GLYPHS[key] : XIANGQI_GLYPHS[key];
+    if (!glyph) return <span className="text-xs opacity-60">{key}</span>;
+    const isBlack = key.startsWith("black_");
+    return (
+      <span
+        className="flex h-full w-full items-center justify-center text-lg font-semibold sm:text-2xl"
+        style={{
+          color: isBlack ? "#111827" : "#8b1e1e",
+          textShadow: isBlack ? "0 1px 0 rgba(255,255,255,0.22)" : "0 1px 0 rgba(255,255,255,0.3)",
+        }}
+      >
+        {glyph}
+      </span>
+    );
+  }
+
+  function renderSeatBadge(seat: string) {
+    return (
+      <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ background: "rgba(255,255,255,0.12)", color: gameTheme.ink }}>
+        {seat.replace(/_/g, " ")}
+      </span>
+    );
+  }
+
+  function renderPlayerRail() {
+    const players = Array.isArray(snapshot?.players) ? snapshot.players : [];
+    return (
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {players.map((player: any, index: number) => {
+          const id = String(player?.id || "");
+          return (
+            <button
+              key={`${id}_${index}`}
+              className="flex items-center gap-3 rounded-2xl border px-3 py-3 text-left"
+              style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)" }}
+              onClick={() => openProfileCard(id, id.startsWith("openclaw:") ? "openclaw" : "user")}
+            >
+              <img src={avatarById(id, id.startsWith("openclaw:") ? "openclaw" : "user")} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-11 w-11 rounded-full border object-cover" style={{ borderColor: "rgba(255,255,255,0.18)" }} alt={id} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold" style={{ color: gameTheme.ink }}>{displayNameById(id, id.startsWith("openclaw:") ? "openclaw" : "user")}</div>
+                <div className="mt-1 flex items-center gap-2">
+                  {renderSeatBadge(String(player?.seat || `seat-${index + 1}`))}
+                  <span className="text-[11px]" style={{ color: "color-mix(in oklab, white 72%, transparent)" }}>{id.startsWith("openclaw:") ? "OpenClaw" : "Player"}</span>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    );
   }
 
   function formatChatTime(ts?: number) {
@@ -1150,9 +1248,137 @@ export function RoomClient({ roomId }: { roomId: string }) {
                   })}
                 </div>
               </div>
+            ) : gameType === "go" ? (
+              <div className="w-full max-w-3xl overflow-auto rounded-2xl border p-4" style={{ borderColor: "color-mix(in oklab, var(--border) 88%, transparent)", background: "linear-gradient(180deg, #d5a766 0%, #c69356 100%)" }}>
+                <div className="mx-auto grid gap-[1px]" style={{ gridTemplateColumns: `repeat(${boardSize}, minmax(22px, 1fr))`, maxWidth: 760 }}>
+                  {Array.from({ length: boardSize * boardSize }).map((_, i) => {
+                    const x = i % boardSize;
+                    const y = Math.floor(i / boardSize);
+                    const v = board?.[y]?.[x];
+                    return (
+                      <div key={i} className="relative aspect-square min-h-[22px] min-w-[22px]" style={{ background: "rgba(117, 76, 36, 0.18)" }}>
+                        <div className="absolute inset-x-[8%] top-1/2 h-px -translate-y-1/2 bg-[rgba(92,56,22,0.55)]" />
+                        <div className="absolute inset-y-[8%] left-1/2 w-px -translate-x-1/2 bg-[rgba(92,56,22,0.55)]" />
+                        <div className="absolute inset-[13%] flex items-center justify-center">{renderStone(v)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : gameType === "chess" ? (
+              <div className="w-full max-w-2xl overflow-auto rounded-2xl border p-3" style={{ borderColor: "color-mix(in oklab, var(--border) 88%, transparent)", background: "#24170f" }}>
+                <div className="mx-auto grid gap-0.5" style={{ gridTemplateColumns: `repeat(${boardWidth}, minmax(34px, 1fr))`, maxWidth: 560 }}>
+                  {Array.from({ length: boardWidth * boardHeight }).map((_, i) => {
+                    const x = i % boardWidth;
+                    const y = Math.floor(i / boardWidth);
+                    const v = board?.[y]?.[x];
+                    const isDark = (x + y) % 2 === 1;
+                    return (
+                      <div
+                        key={i}
+                        className="aspect-square min-h-[34px] min-w-[34px]"
+                        style={{ background: isDark ? "#b77940" : "#f2d7b0" }}
+                        title={typeof v === "string" ? v : ""}
+                      >
+                        {renderPiece(v, "chess")}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : gameType === "xiangqi" ? (
+              <div className="w-full max-w-3xl overflow-auto rounded-2xl border p-4" style={{ borderColor: "color-mix(in oklab, var(--border) 88%, transparent)", background: "linear-gradient(180deg, #d9b278 0%, #c69356 100%)" }}>
+                <div className="mx-auto grid gap-1" style={{ gridTemplateColumns: `repeat(${boardWidth}, minmax(34px, 1fr))`, maxWidth: 620 }}>
+                  {Array.from({ length: boardWidth * boardHeight }).map((_, i) => {
+                    const x = i % boardWidth;
+                    const y = Math.floor(i / boardWidth);
+                    const v = board?.[y]?.[x];
+                    return (
+                      <div key={i} className="relative aspect-square min-h-[34px] min-w-[34px]" title={typeof v === "string" ? v : ""}>
+                        <div className="absolute inset-x-[8%] top-1/2 h-px -translate-y-1/2 bg-[rgba(92,56,22,0.55)]" />
+                        <div className="absolute inset-y-[8%] left-1/2 w-px -translate-x-1/2 bg-[rgba(92,56,22,0.55)]" />
+                        {v ? (
+                          <div className="absolute inset-[10%] rounded-full border shadow-sm" style={{ borderColor: "#7c5326", background: "radial-gradient(circle at 35% 30%, #fff3d6 0%, #efd39f 62%, #d7a35f 100%)" }}>
+                            {renderPiece(v, "xiangqi")}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : gameType === "texas_holdem" ? (
+              <div className="w-full max-w-5xl rounded-[30px] border p-5" style={{ borderColor: "rgba(212,169,58,0.25)", background: "radial-gradient(circle at center, rgba(27,94,63,0.96) 0%, rgba(8,33,27,0.96) 72%)", boxShadow: "0 22px 70px rgba(0,0,0,0.38)" }}>
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "rgba(255,241,221,0.66)" }}>Casino Noir</div>
+                    <div className="text-xl font-semibold" style={{ color: "#f6f1dd" }}>Table Pot: {Number((gameState as any)?.board?.pot || 0)}</div>
+                  </div>
+                  <div className="rounded-full px-4 py-1.5 text-xs font-semibold" style={{ background: "rgba(255,255,255,0.08)", color: "#f6f1dd", border: "1px solid rgba(255,255,255,0.14)" }}>
+                    Street: {String((gameState as any)?.board?.street || "preflop")}
+                  </div>
+                </div>
+                <div className="rounded-[999px] border p-6" style={{ borderColor: "rgba(255,255,255,0.14)", background: "radial-gradient(circle at center, rgba(21,117,84,0.42) 0%, rgba(10,60,42,0.4) 100%)" }}>
+                  <div className="mb-5 flex flex-wrap justify-center gap-3">
+                    {(Array.isArray((gameState as any)?.board?.community) ? (gameState as any).board.community : []).map((card: string, idx: number) => (
+                      <div key={`${card}_${idx}`} className="flex h-24 w-16 items-center justify-center rounded-2xl border text-xl font-bold shadow-sm" style={{ borderColor: "rgba(212,169,58,0.38)", background: "linear-gradient(180deg, #fffcf6 0%, #f3e7cf 100%)", color: "#121212" }}>
+                        {card}
+                      </div>
+                    ))}
+                  </div>
+                  {renderPlayerRail()}
+                </div>
+              </div>
+            ) : gameType === "werewolf" ? (
+              <div className="w-full max-w-5xl rounded-[30px] border p-6" style={{ borderColor: "rgba(156,176,255,0.26)", background: "linear-gradient(180deg, rgba(11,16,33,0.96) 0%, rgba(26,20,50,0.96) 100%)", boxShadow: "0 24px 80px rgba(2,6,23,0.45)" }}>
+                <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "rgba(237,241,255,0.62)" }}>Moonlit Village</div>
+                    <div className="text-xl font-semibold" style={{ color: "#edf1ff" }}>Phase: {String((gameState as any)?.board?.phase || "night")}</div>
+                  </div>
+                  <div className="text-sm" style={{ color: "rgba(237,241,255,0.72)" }}>Round {Number((gameState as any)?.board?.round || 1)}</div>
+                </div>
+                <div className="mb-4 rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: "rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "#edf1ff" }}>
+                  {String((gameState as any)?.board?.lastReveal || "The village is waiting for the next reveal.")}
+                </div>
+                {renderPlayerRail()}
+              </div>
+            ) : gameType === "junqi" ? (
+              <div className="w-full max-w-3xl rounded-[28px] border p-4" style={{ borderColor: "rgba(217,165,90,0.24)", background: "linear-gradient(180deg, #342216 0%, #20150f 100%)", boxShadow: "0 24px 70px rgba(0,0,0,0.34)" }}>
+                <div className="mb-4 flex items-center justify-between">
+                  <div className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "rgba(255,241,213,0.65)" }}>War Room</div>
+                  <div className="text-sm" style={{ color: "#fff1d5" }}>Frontline {turnText}</div>
+                </div>
+                <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${boardWidth}, minmax(44px, 1fr))` }}>
+                  {Array.from({ length: boardWidth * boardHeight }).map((_, i) => {
+                    const x = i % boardWidth;
+                    const y = Math.floor(i / boardWidth);
+                    const v = board?.[y]?.[x];
+                    return (
+                      <div key={i} className="flex aspect-square min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border text-center text-[11px] font-semibold uppercase" style={{ borderColor: "rgba(255,255,255,0.08)", background: v ? "linear-gradient(180deg, rgba(217,165,90,0.18) 0%, rgba(255,255,255,0.04) 100%)" : "rgba(255,255,255,0.03)", color: "#fff1d5" }}>
+                        {typeof v === "string" ? v.replace("_", "\n") : ""}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : gameType === "who_is_undercover" ? (
+              <div className="w-full max-w-5xl rounded-[30px] border p-6" style={{ borderColor: "rgba(255,139,44,0.26)", background: "linear-gradient(180deg, rgba(29,10,47,0.96) 0%, rgba(179,30,105,0.76) 100%)", boxShadow: "0 24px 80px rgba(18,4,28,0.42)" }}>
+                <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "rgba(255,241,246,0.68)" }}>Neon Party</div>
+                    <div className="text-xl font-semibold" style={{ color: "#fff1f6" }}>Phase: {String((gameState as any)?.board?.phase || "clue")}</div>
+                  </div>
+                  <div className="text-sm" style={{ color: "rgba(255,241,246,0.72)" }}>Round {Number((gameState as any)?.board?.round || 1)}</div>
+                </div>
+                <div className="mb-4 rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff1f6" }}>
+                  {String((gameState as any)?.board?.reveal || "Clues are circulating. Someone at the table is off by one word.")}
+                </div>
+                {renderPlayerRail()}
+              </div>
             ) : (
               <div className="w-full max-w-xl rounded-xl border border-slate-700 bg-slate-900/50 p-6 text-center text-slate-300">
-                {gameType} board preview coming soon
+                {gameType} board unavailable
               </div>
             )
           ) : (
@@ -1180,6 +1406,39 @@ export function RoomClient({ roomId }: { roomId: string }) {
                 <div className="rounded-md px-2 py-2 text-xs" style={{ background: "color-mix(in oklab, var(--surface) 86%, transparent)", color: "var(--fg)" }}>
                   {t("room.hudAwaitingOpenclaw")}
                 </div>
+              ) : !isDuelHud ? (
+                <>
+                  <div className="grid gap-2 rounded-xl px-2 py-2" style={{ background: "color-mix(in oklab, var(--surface) 86%, transparent)" }}>
+                    {genericSeatList.map((seat) => {
+                      const playerId = openclawBySeat[seat] || "";
+                      return (
+                        <div key={seat} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-2" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
+                          <div className="flex items-center gap-2">
+                            <img src={avatarById(playerId, "openclaw")} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-9 w-9 rounded-full border object-cover" style={{ borderColor: "rgba(255,255,255,0.14)" }} alt={seat} />
+                            <div>
+                              <div className="text-[11px]" style={{ color: "var(--fg)" }}>{displayNameById(playerId, "openclaw") || t("room.hudNoSeatYet")}</div>
+                              <div className="text-[10px]" style={{ color: "color-mix(in oklab, var(--fg) 68%, transparent)" }}>{seat}</div>
+                            </div>
+                          </div>
+                          <div className="text-[10px] font-semibold" style={{ color: "var(--fg)" }}>{formatMs(seatRemainMs(seat))}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-2 rounded-xl px-2 py-2" style={{ background: "color-mix(in oklab, var(--surface) 86%, transparent)" }}>
+                    <div className="mb-1 text-[11px]" style={{ color: "color-mix(in oklab, var(--fg) 68%, transparent)" }}>{t("room.actionHistory")}</div>
+                    <div className="max-h-28 space-y-1 overflow-auto pr-1">
+                      {moveHistory.length === 0 ? (
+                        <div className="text-[11px]" style={{ color: "color-mix(in oklab, var(--fg) 62%, transparent)" }}>-</div>
+                      ) : [...moveHistory].reverse().map((mv, idx) => (
+                        <div key={mv.id} className="flex items-center justify-between text-[11px]" style={{ color: "var(--fg)" }}>
+                          <span className="truncate">{moveHistory.length - idx}. {displayNameById(mv.actorId, "openclaw")}</span>
+                          <span className="ml-2 shrink-0">{mv.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
               ) : (
                 <>
                   <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-xl px-2 py-2" style={{ background: "color-mix(in oklab, var(--surface) 86%, transparent)" }}>

@@ -253,13 +253,25 @@ export class GameRoomDO {
       return { boardSize: 15, winCondition: "five_in_a_row", first: "black" };
     }
     if (gameType === "xiangqi") {
-      return { board: "9x10", notation: "from-to", status: "placeholder" };
+      return { board: "9x10", notation: "a0-i9", objective: "checkmate", first: "black" };
     }
     if (gameType === "go") {
-      return { boardSize: 19, komi: 6.5, status: "placeholder" };
+      return { boardSize: 19, komi: 6.5, objective: "territory", passEndsAfter: 2, first: "black" };
     }
     if (gameType === "chess") {
-      return { board: "8x8", notation: "from-to", status: "placeholder" };
+      return { board: "8x8", notation: "a1-h8", objective: "checkmate", castling: true, enPassant: true, first: "black" };
+    }
+    if (gameType === "texas_holdem") {
+      return { seats: 6, blinds: { small: 5, big: 10 }, streets: ["preflop", "flop", "turn", "river", "showdown"] };
+    }
+    if (gameType === "werewolf") {
+      return { seats: 8, phases: ["night", "day", "vote"], hiddenRoles: true };
+    }
+    if (gameType === "junqi") {
+      return { board: "5x6", objective: "capture_flag", first: "red" };
+    }
+    if (gameType === "who_is_undercover") {
+      return { seats: 8, phases: ["clue", "vote"], hiddenWords: true };
     }
     return {};
   }
@@ -269,6 +281,10 @@ export class GameRoomDO {
     if (gameType === "xiangqi") return { type: "move", payload: { from: "string", to: "string" } };
     if (gameType === "go") return { type: "move", payload: { x: "number", y: "number", pass: "boolean?" } };
     if (gameType === "chess") return { type: "move", payload: { from: "string", to: "string", promotion: "string?" } };
+    if (gameType === "texas_holdem") return { type: "action", payload: { action: "fold|check|call|raise", amount: "number?" } };
+    if (gameType === "werewolf") return { type: "action", payload: { action: "night_kill|inspect|save|vote|ready", target: "string?" } };
+    if (gameType === "junqi") return { type: "move", payload: { from: "string", to: "string" } };
+    if (gameType === "who_is_undercover") return { type: "action", payload: { action: "clue|vote", text: "string?", target: "string?" } };
     return { type: "move", payload: {} };
   }
 
@@ -368,7 +384,7 @@ export class GameRoomDO {
     try {
       const joined = await this.joinByPlayerId(data, candidateId, payload?.inviteCode);
       meta.player = { id: candidateId, seat: joined.seat, token: joined.playerToken };
-      if (data.state.status !== "waiting") {
+      if (!candidateId.startsWith("openclaw:")) {
         meta.role = "player";
       }
       this.sockets.set(ws, meta);
@@ -410,7 +426,8 @@ export class GameRoomDO {
 
     const ownerId = meta.viewerId;
 
-    if (data.gameType !== "gomoku") {
+    const engine = getEngine(data.gameType);
+    if (!engine.chooseBotMove) {
       ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "join_bot", ok: false, error: "bot not supported for this game yet" })));
       return;
     }
@@ -548,6 +565,13 @@ export class GameRoomDO {
     const openclawMap = new Map<string, { id: string; seat: string }>();
     const spectatorMap = new Map<string, { id: string }>();
     const activePlayerIds = new Set(data.players.map((p) => p.id));
+    const playerById = new Map(data.players.map((p) => [p.id, p] as const));
+    const participantIsReady = (participantId: string): boolean => {
+      if (!participantId || participantId.startsWith("openclaw:")) return false;
+      if (!playerById.has(participantId)) return false;
+      if (this.isBotUserId(participantId)) return true;
+      return playerById.has(`openclaw:${participantId}`);
+    };
 
     for (const p of data.players) {
       if (p.id.startsWith("openclaw:")) {
@@ -556,22 +580,41 @@ export class GameRoomDO {
     }
 
     for (const [, meta] of this.sockets.entries()) {
-      if (meta.role === "player" && meta.player && activePlayerIds.has(meta.player.id)) {
-        userMap.set(meta.player.id, { id: meta.player.id, seat: meta.player.seat });
-      } else if (meta.role === "agent" && meta.player && activePlayerIds.has(meta.player.id)) {
-        openclawMap.set(meta.player.id, { id: meta.player.id, seat: meta.player.seat });
-      } else if (meta.role === "spectator") {
-        const id = meta.viewerId || `guest_${Math.random().toString(36).slice(2, 8)}`;
-        if (!userMap.has(id) && !openclawMap.has(id)) {
-          spectatorMap.set(id, { id });
-        }
+      const viewerId = String(meta.viewerId || "");
+      const activeSocketPlayer = meta.player?.id && activePlayerIds.has(meta.player.id) ? meta.player : undefined;
+      const viewerParticipant = viewerId ? playerById.get(viewerId) : undefined;
+
+      if (meta.role === "player" && activeSocketPlayer && participantIsReady(activeSocketPlayer.id)) {
+        userMap.set(activeSocketPlayer.id, { id: activeSocketPlayer.id, seat: activeSocketPlayer.seat });
+        spectatorMap.delete(activeSocketPlayer.id);
+        continue;
+      }
+
+      if (meta.role === "agent" && activeSocketPlayer) {
+        openclawMap.set(activeSocketPlayer.id, { id: activeSocketPlayer.id, seat: activeSocketPlayer.seat });
+        spectatorMap.delete(activeSocketPlayer.id);
+        continue;
+      }
+
+      // A seated human may temporarily reconnect as a spectator socket before
+      // the UI finishes upgrading the role; keep them in the player list and
+      // avoid showing them as their own spectator duplicate.
+      if (viewerParticipant && !viewerParticipant.id.startsWith("openclaw:") && participantIsReady(viewerParticipant.id)) {
+        userMap.set(viewerParticipant.id, { id: viewerParticipant.id, seat: viewerParticipant.seat });
+        spectatorMap.delete(viewerParticipant.id);
+        continue;
+      }
+
+      const id = viewerId || `guest_${Math.random().toString(36).slice(2, 8)}`;
+      if (!userMap.has(id) && !openclawMap.has(id)) {
+        spectatorMap.set(id, { id });
       }
     }
 
     return {
       users: [...userMap.values()],
       openclaw: [...openclawMap.values()],
-      spectators: [...spectatorMap.values()],
+      spectators: [...spectatorMap.values()].filter((u) => !userMap.has(u.id) && !openclawMap.has(u.id)),
     };
   }
 
@@ -647,8 +690,13 @@ export class GameRoomDO {
   }
 
   private gameMaxParticipants(gameType: string): number {
-    if (gameType === "gomoku" || gameType === "go" || gameType === "xiangqi" || gameType === "chess") return 2;
-    return 2;
+    const engine = getEngine(gameType);
+    return Number(engine.maxPlayers || engine.seats?.length || 2);
+  }
+
+  private gameMinParticipants(gameType: string): number {
+    const engine = getEngine(gameType);
+    return Number(engine.minPlayers || 2);
   }
 
   private normalizeParticipantId(id: string): string {
@@ -656,6 +704,12 @@ export class GameRoomDO {
   }
 
   private nextSeatFor(data: RoomData): Seat {
+    const engine = getEngine(data.gameType);
+    if (engine.seats?.length) {
+      const used = new Set(data.players.map((p) => p.seat));
+      const next = engine.seats.find((seat) => !used.has(seat));
+      if (next) return next;
+    }
     const used = new Set(data.players.map((p) => p.seat));
     return used.has("black") ? "white" : "black";
   }
@@ -742,6 +796,16 @@ export class GameRoomDO {
 
   private getOpponentSeat(data: RoomData, seat: string): string | undefined {
     const seats = Array.from(new Set(data.players.map((p) => p.seat).filter(Boolean)));
+    const engineSeats = getEngine(data.gameType).seats;
+    if (engineSeats?.length) {
+      const currentIndex = engineSeats.indexOf(seat);
+      if (currentIndex >= 0) {
+        for (let offset = 1; offset < engineSeats.length; offset++) {
+          const candidate = engineSeats[(currentIndex + offset) % engineSeats.length];
+          if (seats.includes(candidate)) return candidate;
+        }
+      }
+    }
     return seats.find((s) => s !== seat);
   }
 
@@ -814,10 +878,6 @@ export class GameRoomDO {
     const maxParticipants = this.gameMaxParticipants(data.gameType);
     if (!hasParticipant && participantCount >= maxParticipants) throw new Error("Room is full");
 
-    if (!playerId.startsWith("openclaw:") && !playerId.startsWith("bot:") && data.players.some((p) => !p.id.startsWith("openclaw:") && !p.id.startsWith("bot:"))) {
-      throw new Error("Room player seat is full");
-    }
-
     const seat = playerId.startsWith("openclaw:")
       ? (data.players.find((p) => this.normalizeParticipantId(p.id) === participantId)?.seat || this.nextSeatFor(data))
       : this.nextSeatFor(data);
@@ -825,9 +885,10 @@ export class GameRoomDO {
     const token = crypto.randomUUID();
     data.players.push({ id: playerId, seat, token });
     if (playerId.startsWith("openclaw:")) data.agentLastSeenAt = Date.now();
+    this.bindViewerParticipantIfPresent(data, playerId, seat);
 
     const readyParticipants = this.readyParticipantCount(data);
-    if (readyParticipants >= 2 && data.state.status === "waiting") {
+    if (readyParticipants >= this.gameMinParticipants(data.gameType) && data.state.status === "waiting") {
       data.state.status = "playing";
       const clock = this.ensureClockState(data);
       clock.turnStartedAt = Date.now();
@@ -842,6 +903,30 @@ export class GameRoomDO {
       await this.runBotTurns(data);
     }
     return { playerToken: token, seat };
+  }
+
+  private bindViewerParticipantIfPresent(data: RoomData, playerId: string, seat: Seat): void {
+    if (!playerId.startsWith("openclaw:")) return;
+
+    const participantId = this.normalizeParticipantId(playerId);
+    if (!participantId || participantId.startsWith("bot:")) return;
+
+    const matchingSockets = Array.from(this.sockets.entries()).filter(([, meta]) => String(meta.viewerId || "") === participantId);
+    if (matchingSockets.length === 0) return;
+
+    const hasHumanPlayer = data.players.some((p) => p.id === participantId);
+    if (!hasHumanPlayer) {
+      data.players.push({ id: participantId, seat, token: crypto.randomUUID() });
+    }
+
+    for (const [socket, meta] of matchingSockets) {
+      meta.role = "player";
+      if (!meta.player || meta.player.id !== participantId) {
+        const player = data.players.find((p) => p.id === participantId);
+        if (player) meta.player = player;
+      }
+      this.sockets.set(socket, meta);
+    }
   }
 
   private async removeParticipantById(data: RoomData, participantPlayerId: string): Promise<boolean> {
@@ -862,7 +947,7 @@ export class GameRoomDO {
     }
 
     const readyParticipants = this.readyParticipantCount(data);
-    if (readyParticipants < 2) {
+    if (readyParticipants < this.gameMinParticipants(data.gameType)) {
       (data.state as any).status = "waiting";
     }
     if (!data.players.some((p) => p.id.startsWith("openclaw:"))) {
@@ -1120,7 +1205,8 @@ export class GameRoomDO {
     const data = await this.requireRoom();
     if (String(data.ownerId || "") !== requesterId) throw new Error("only owner can add bot");
     if (String((data.state as any)?.status || "") !== "waiting") throw new Error("can only add bot before game starts");
-    if (data.gameType !== "gomoku") throw new Error("bot not supported for this game yet");
+    const engine = getEngine(data.gameType);
+    if (!engine.chooseBotMove) throw new Error("bot not supported for this game yet");
 
     const existingBotIds = new Set(
       data.players

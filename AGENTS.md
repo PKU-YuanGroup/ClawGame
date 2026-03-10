@@ -117,18 +117,24 @@ Fake-room modes:
 
 ## 5) Docs Source of Truth and Sync
 
-Website docs are synchronized from repository docs:
+Website docs are synchronized from repository docs with a hybrid model:
 
-- Source of truth: `docs/website-docs.json`
-- Frontend runtime source: `frontend/public/docs/website-docs.json`
+- Navigation source of truth: `docs/website-docs.json`
+- Long-form markdown source: `docs/**/*.md` (for example `docs/server/README.md`)
+- Frontend runtime mirror: `frontend/public/docs/**`
 - Sync command: `scripts/sync-docs-to-frontend.sh`
 
-Update workflow:
-1. Edit `docs/website-docs.json`
-2. Run sync script
-3. Build frontend and deploy worker assets
+`website-docs.json` can define either:
+- Inline markdown section: `{ id, title, markdown }`
+- File-backed markdown section: `{ id, title, markdownPath }` where `markdownPath` points to `/docs/...`
 
-This keeps docs editable in-repo while ensuring the website and repository stay aligned.
+Update workflow:
+1. Edit `docs/website-docs.json` for docs menu/order
+2. Edit markdown files under `docs/` for section content
+3. Run sync script
+4. Build frontend and deploy worker assets
+
+This keeps docs structure configurable while allowing large sections (such as server guides) to live in standalone README files.
 
 ## 6) CI/CD and Deployment Model
 

@@ -3,6 +3,13 @@ import { json } from "../lib/http";
 import { getUserProfile, requireUser } from "../lib/user";
 import { ensureWelcomeBadgeForUser, getBadgeDefs } from "../lib/badges";
 import { storeGet, storePut } from "../lib/store";
+import {
+  getClawCredential,
+  getOrCreateClawBindingToken,
+  getOrCreateClawCredential,
+  resolveUserByBindingToken,
+  resolveUserByCredential,
+} from "../lib/claw-auth";
 
 export async function handleProfileRoutes(request: Request, env: Env, url: URL): Promise<Response | null> {
   if (url.pathname === "/api/me") {
@@ -85,17 +92,27 @@ export async function handleProfileRoutes(request: Request, env: Env, url: URL):
 
   if (request.method === "POST" && url.pathname === "/api/me/claw-token") {
     const me = await requireUser(request, env);
-    const token = crypto.randomUUID();
-    await storePut(env, `claw-token:${token}`, me.userId, { expirationTtl: 60 * 10 });
-    return json({ token, expiresInSec: 600 });
+    const token = await getOrCreateClawBindingToken(env, me.userId);
+    const credential = await getClawCredential(env, me.userId);
+    return json({
+      token,
+      tokenType: "binding_code",
+      expiresInSec: null,
+      hasCredential: Boolean(credential),
+      credential: credential || null,
+    });
   }
 
   if (request.method === "POST" && url.pathname === "/api/claw/avatar-upload") {
-    const body = (await request.json()) as { token?: string; dataUrl?: string };
-    const token = body.token || "";
-    if (!token) return json({ error: "token is required" }, 400);
-    const userId = await storeGet(env, `claw-token:${token}`);
-    if (!userId) return json({ error: "invalid or expired token" }, 401);
+    const body = (await request.json()) as { token?: string; credential?: string; dataUrl?: string };
+    const token = String(body.token || "").trim();
+    const credential = String(body.credential || "").trim();
+    const userId =
+      (credential ? await resolveUserByCredential(env, credential) : null)
+      || (token ? await resolveUserByBindingToken(env, token) : null)
+      || (token ? await storeGet(env, `claw-token:${token}`) : null);
+    if (!userId) return json({ error: "invalid credential or token" }, 401);
+    const userIdStr = String(userId);
 
     const raw = body.dataUrl || "";
     const m = raw.match(/^data:([^;]+);base64,(.+)$/);
@@ -105,14 +122,14 @@ export async function handleProfileRoutes(request: Request, env: Env, url: URL):
     if (!contentType.startsWith("image/")) return json({ error: "only image allowed" }, 400);
     if (b64.length > 2_000_000) return json({ error: "image too large" }, 400);
 
-    await storePut(env, `claw-avatar-bin:${userId}`, b64);
-    await storePut(env, `claw-avatar-ct:${userId}`, contentType);
+    await storePut(env, `claw-avatar-bin:${userIdStr}`, b64);
+    await storePut(env, `claw-avatar-ct:${userIdStr}`, contentType);
 
-    const profile = await getUserProfile(env, userId);
+    const profile = await getUserProfile(env, userIdStr);
     const base = env.APP_BASE_URL || new URL(request.url).origin;
-    profile.clawAvatarUrl = `${base}/api/claw/avatar/${encodeURIComponent(userId)}?v=${Date.now()}`;
+    profile.clawAvatarUrl = `${base}/api/claw/avatar/${encodeURIComponent(userIdStr)}?v=${Date.now()}`;
     profile.updatedAt = Date.now();
-    await storePut(env, `user:${userId}`, JSON.stringify(profile));
+    await storePut(env, `user:${userIdStr}`, JSON.stringify(profile));
     return json({ ok: true, clawAvatarUrl: profile.clawAvatarUrl });
   }
 
@@ -127,19 +144,31 @@ export async function handleProfileRoutes(request: Request, env: Env, url: URL):
   }
 
   if (request.method === "POST" && url.pathname === "/api/claw/config") {
-    const body = (await request.json()) as { token?: string; clawNickname?: string; clawBio?: string; clawOwnerReview?: string };
-    const token = body.token || "";
-    if (!token) return json({ error: "token is required" }, 400);
-    const userId = await storeGet(env, `claw-token:${token}`);
-    if (!userId) return json({ error: "invalid or expired token" }, 401);
+    const body = (await request.json()) as {
+      token?: string;
+      credential?: string;
+      clawNickname?: string;
+      clawBio?: string;
+      clawOwnerReview?: string;
+    };
+    const token = String(body.token || "").trim();
+    const credentialInput = String(body.credential || "").trim();
+    if (!token && !credentialInput) return json({ error: "token or credential is required" }, 400);
+    const userId =
+      (credentialInput ? await resolveUserByCredential(env, credentialInput) : null)
+      || (token ? await resolveUserByBindingToken(env, token) : null)
+      || (token ? await storeGet(env, `claw-token:${token}`) : null);
+    if (!userId) return json({ error: "invalid credential or token" }, 401);
+    const userIdStr = String(userId);
 
-    const profile = await getUserProfile(env, userId);
+    const profile = await getUserProfile(env, userIdStr);
     profile.clawNickname = (body.clawNickname ?? profile.clawNickname ?? "Claw").slice(0, 40);
     profile.clawBio = (body.clawBio ?? profile.clawBio ?? "").slice(0, 500);
     profile.clawOwnerReview = (body.clawOwnerReview ?? profile.clawOwnerReview ?? "").slice(0, 500);
     profile.updatedAt = Date.now();
-    await storePut(env, `user:${userId}`, JSON.stringify(profile));
-    return json({ ok: true, profile });
+    await storePut(env, `user:${userIdStr}`, JSON.stringify(profile));
+    const credential = credentialInput || (await getOrCreateClawCredential(env, userIdStr));
+    return json({ ok: true, profile, credential });
   }
 
   return null;

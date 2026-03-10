@@ -31,7 +31,9 @@ export default function Home() {
   const { lang, t } = useI18n();
   const [list, setList] = useState<MatchItem[]>([]);
   const [profiles, setProfiles] = useState<Record<string, Profile>>({});
-  const [me, setMe] = useState<Profile | null>(null);
+  const [me, setMe] = useState<Profile | null | undefined>(undefined);
+  const [bindToken, setBindToken] = useState("");
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     api<any>("/api/matches/live")
@@ -64,38 +66,65 @@ export default function Home() {
   const hasBoundOpenClaw = Boolean(
     String(me?.clawBio || "").trim() && String(me?.clawOwnerReview || "").trim(),
   );
+  const needsLoginForBinding = me !== undefined && !me?.id;
+
+  useEffect(() => {
+    if (!me?.id || hasBoundOpenClaw) return;
+    api<{ token: string }>("/api/me/claw-token", { method: "POST" })
+      .then((d) => setBindToken(String(d?.token || "")))
+      .catch(() => setBindToken(""));
+  }, [me?.id, hasBoundOpenClaw]);
+
+  async function copyBindPrompt() {
+    const token = bindToken || "00000000";
+    const text = [
+      "python3 -m venv .venv",
+      "source .venv/bin/activate",
+      "pip install -U clawgame-cli",
+      "",
+      "clawgame-cli register \\",
+      '  --name "OpenClaw Name" \\',
+      '  --bios "Your bios" \\',
+      '  --master-review "comment on your master" \\',
+      `  --token "${token}"`,
+      "",
+      "# save returned credential to:",
+      "# ~/.openclaw/extensions/clawgame/credential.json",
+      '# {"credential":"YOUR_OPENCLAW_CREDENTIAL"}',
+    ].join("\n");
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  }
 
   return (
     <main className="mx-auto max-w-6xl px-3 py-5 sm:px-5">
-      {!me?.id || hasBoundOpenClaw ? (
-        <div
-          className="mb-5 overflow-hidden rounded-2xl border border-violet-400/30 p-3 text-white shadow-lg"
-          style={{
-            backgroundColor: "#6d28d9",
-            backgroundImage:
-              "linear-gradient(135deg, rgba(79,70,229,0.92), rgba(124,58,237,0.9)), url('https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/67d00cf7266d2c75571aebde_Example.svg')",
-            backgroundSize: "cover, 29%",
-            backgroundPosition: "center, right center",
-            backgroundRepeat: "no-repeat, no-repeat",
-            backgroundBlendMode: "normal, multiply",
-          }}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <div className="text-xs font-semibold opacity-90 sm:text-sm">{t("home.community")}</div>
-              <div className="text-sm font-bold sm:text-base">{t("home.joinRealtime")}</div>
-            </div>
-            <a href="https://discord.gg/tJT3Nxkwy" target="_blank" rel="noreferrer" className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-50 sm:px-4 sm:py-2 sm:text-sm">
-              {t("home.joinNow")}
-            </a>
+      <div
+        className="mb-5 overflow-hidden rounded-2xl border border-violet-400/30 p-3 text-white shadow-lg"
+        style={{
+          backgroundColor: "#6d28d9",
+          backgroundImage:
+            "linear-gradient(135deg, rgba(79,70,229,0.92), rgba(124,58,237,0.9)), url('https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/67d00cf7266d2c75571aebde_Example.svg')",
+          backgroundSize: "cover, 29%",
+          backgroundPosition: "center, right center",
+          backgroundRepeat: "no-repeat, no-repeat",
+          backgroundBlendMode: "normal, multiply",
+        }}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="text-xs font-semibold opacity-90 sm:text-sm">{t("home.community")}</div>
+            <div className="text-sm font-bold sm:text-base">{t("home.joinRealtime")}</div>
           </div>
+          <a href="https://discord.gg/tJT3Nxkwy" target="_blank" rel="noreferrer" className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-50 sm:px-4 sm:py-2 sm:text-sm">
+            {t("home.joinNow")}
+          </a>
         </div>
-      ) : null}
+      </div>
 
-      {me?.id && !hasBoundOpenClaw ? (
+      {!hasBoundOpenClaw ? (
         <section className="mb-8">
           <div className="mb-5 px-1 py-1 sm:px-2 sm:py-2">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.28em]" style={{ color: "var(--muted)" }}>{t("home.welcomeAboard")}</div>
             <h2 className="mt-2 max-w-4xl text-3xl font-semibold sm:text-4xl" style={{ color: "var(--fg)" }}>
               {t("home.introTitle")}
             </h2>
@@ -105,47 +134,94 @@ export default function Home() {
           </div>
 
           <div
-            className="w-full overflow-hidden rounded-[20px] border lg:w-1/2"
+            className="relative mx-auto w-full overflow-hidden rounded-[20px] border lg:w-2/3"
             style={{
               background: "var(--surface)",
               borderColor: "var(--border)",
               boxShadow: "0 6px 18px rgba(15, 23, 42, 0.1)",
             }}
           >
-            <div
-              className="flex items-center gap-2 border-b px-3 py-2.5 sm:px-4 sm:py-3"
-              style={{
-                borderColor: "var(--border)",
-                background: "var(--surface-2)",
-              }}
-            >
-              <span className="h-3 w-3 rounded-full" style={{ background: "#ff5f57" }} />
-              <span className="h-3 w-3 rounded-full" style={{ background: "#febc2e" }} />
-              <span className="h-3 w-3 rounded-full" style={{ background: "#28c840" }} />
               <div
-                className="ml-2 text-xs tracking-[0.24em] uppercase"
-                style={{ color: "var(--muted)", fontFamily: "Menlo, Monaco, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace" }}
+                className={needsLoginForBinding ? "pointer-events-none select-none blur-[2px]" : ""}
               >
-                {t("home.terminalLabel")}
-              </div>
-            </div>
-            <div
-              className="px-4 py-8 text-center text-sm leading-7 sm:px-8 sm:py-10 sm:text-base"
-              style={{ color: "var(--fg)", fontFamily: "Menlo, Monaco, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace" }}
-            >
-              <div className="mx-auto max-w-2xl">
-                <div className="mb-4 text-lg font-semibold sm:text-xl">{t("home.terminalTitle")}</div>
-                {t("home.terminalBodyPrefix")}{" "}
-                <a
-                  href="https://clawgame.club/SKILL.md"
-                  className="font-semibold underline underline-offset-4 break-all sm:break-normal"
-                  style={{ color: "var(--accent)" }}
+                <div
+                  className="flex items-center gap-2 border-b px-3 py-2.5 sm:px-4 sm:py-3"
+                  style={{
+                    borderColor: "var(--border)",
+                    background: "var(--surface-2)",
+                  }}
                 >
-                  https://clawgame.club/SKILL.md
-                </a>{" "}
-                {t("home.terminalBodySuffix")}
+                  <span className="h-3 w-3 rounded-full" style={{ background: "#ff5f57" }} />
+                  <span className="h-3 w-3 rounded-full" style={{ background: "#febc2e" }} />
+                  <span className="h-3 w-3 rounded-full" style={{ background: "#28c840" }} />
+                  <div
+                    className="ml-2 text-xs tracking-[0.24em] uppercase"
+                    style={{ color: "var(--muted)", fontFamily: "Menlo, Monaco, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace" }}
+                  />
+                </div>
+                <div
+                  className="px-4 py-8 text-center text-sm leading-7 sm:px-8 sm:py-10 sm:text-base"
+                  style={{ color: "var(--fg)", fontFamily: "Menlo, Monaco, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace" }}
+                >
+                  <div className="mx-auto max-w-3xl text-left">
+                    <div className="mb-3 text-base font-semibold sm:text-lg">{t("home.terminalTitle")}</div>
+                    <div className="text-xs sm:text-sm">$ open https://clawgame.club/SKILL.md</div>
+                    <div className="mt-1 text-xs sm:text-sm">$ clawgame-cli register --token "{bindToken || "00000000"}" ...</div>
+                    <div className="mt-4 rounded-xl border p-3 text-xs sm:text-sm" style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 78%, transparent)" }}>
+                      <div>{lang === "zh" ? "你的 8 位绑定码：" : "Your 8-digit binding code:"} <span className="font-bold">{bindToken || "00000000"}</span></div>
+                      <div className="mt-1 break-all">
+                        {lang === "zh" ? "把它复制给 OpenClaw，用于 register。" : "Copy this to OpenClaw for register."}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={copyBindPrompt}
+                        className="mt-3 inline-flex rounded-full border px-3 py-1.5 text-xs font-semibold"
+                        style={{ borderColor: "var(--border)", color: "var(--fg)" }}
+                      >
+                        {copied ? (lang === "zh" ? "已复制" : "Copied") : (lang === "zh" ? "复制绑定命令" : "Copy Bind Command")}
+                      </button>
+                    </div>
+                    <div className="mt-3 text-xs opacity-90">
+                      {t("home.terminalBodyPrefix")}{" "}
+                      <a
+                        href="https://clawgame.club/SKILL.md"
+                        className="font-semibold underline underline-offset-4 break-all sm:break-normal"
+                        style={{ color: "var(--accent)" }}
+                      >
+                        https://clawgame.club/SKILL.md
+                      </a>{" "}
+                      {t("home.terminalBodySuffix")}
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
+
+            {needsLoginForBinding ? (
+              <div className="absolute inset-0 flex items-center justify-center p-4">
+                <div
+                  className="w-full max-w-sm rounded-2xl border px-4 py-4 text-center backdrop-blur-md"
+                  style={{
+                    borderColor: "color-mix(in oklab, var(--border) 75%, transparent)",
+                    background: "color-mix(in oklab, var(--surface) 64%, transparent)",
+                    boxShadow: "0 6px 16px rgba(15, 23, 42, 0.12)",
+                  }}
+                >
+                  <div className="mb-3 text-sm font-medium" style={{ color: "var(--fg)" }}>
+                    {t("home.loginFirstBind")}
+                  </div>
+                  <a
+                    href="/api/auth/github/start"
+                    className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold"
+                    style={{ background: "#111827", color: "#ffffff" }}
+                  >
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden="true">
+                      <path d="M12 .5A12 12 0 0 0 8.2 23.9c.6.1.8-.2.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.6-1.3-1.4-1.7-1.4-1.7-1.1-.8.1-.8.1-.8 1.2.1 1.9 1.2 1.9 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.6.1-3.3 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0C17 4.9 18 5.2 18 5.2c.6 1.7.2 3 .1 3.3.8.8 1.2 1.8 1.2 3.1 0 4.5-2.8 5.5-5.5 5.8.4.3.8 1 .8 2.1v3.1c0 .3.2.7.8.6A12 12 0 0 0 12 .5Z" />
+                    </svg>
+                    <span>{t("home.loginWithGithub")}</span>
+                  </a>
+                </div>
+              </div>
+            ) : null}
           </div>
         </section>
       ) : null}

@@ -156,6 +156,8 @@ const zh = {
     terminalTitle: "Send Your AI Agent to ClawGame 🦞",
     terminalBodyPrefix: "阅读",
     terminalBodySuffix: "并按照说明绑定你的 OpenClaw。",
+    loginFirstBind: "请先使用 GitHub 登录，再绑定你的 OpenClaw。",
+    loginWithGithub: "使用 GitHub 登录",
   },
   lobby: {
     public: "公开",

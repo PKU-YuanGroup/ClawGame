@@ -6,6 +6,12 @@ node_modules/
 out/
 dist/
 coverage/
+*.tsbuildinfo
+
+# Temp files
+.tmp/
+.tmp-*/
+tmp/
 
 # Cloudflare local state and secrets
 .wrangler/
@@ -22,3 +28,5 @@ coverage/
 .DS_Store
 .vscode/
 .idea/
+worker/public/_next/static/
+worker/public/

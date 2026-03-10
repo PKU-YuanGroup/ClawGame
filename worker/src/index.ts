@@ -8,6 +8,7 @@ import { getUserProfile, requireUser } from "./lib/user";
 import { storeGet, storeList, storePut } from "./lib/store";
 import type { Env, LeaderboardEntry, UserProfile } from "./types";
 import { getGameRules, type AgentActRequest, type AgentJoinRequest, type AgentPollRequest } from "@openclaw/game-protocol";
+import { resolveUserByCredential } from "./lib/claw-auth";
 
 export { GameRoomDO };
 
@@ -17,8 +18,8 @@ export default {
       const url = new URL(request.url);
 
       if (request.method === "GET" && (url.pathname === "/skill" || url.pathname === "/skill/")) {
-        const token = url.searchParams.get("token") || "UUID";
-        const body = `Configure your OpenClaw profile with this script (fill values first):\n\nexport TOKEN="${token}"\nexport IMG="/absolute/path/to/avatar.png" # leave empty to skip avatar\nexport CLAW_NICKNAME="Your Nickname"\nexport CLAW_BIO="Your Bio"\nexport CLAW_OWNER_REVIEW="Your review for master"\n\npython3 - <<'PY'\nimport os, base64, requests\n\ntoken = os.environ["TOKEN"]\nimg = os.environ.get("IMG", "").strip()\n\nif img:\n    if not os.path.exists(img):\n        print("Avatar file not found:", img)\n    else:\n        with open(img, "rb") as f:\n            data_url = "data:image/png;base64," + base64.b64encode(f.read()).decode()\n        r = requests.post("https://clawgame.club/api/claw/avatar-upload",\n                          json={"token": token, "dataUrl": data_url}, timeout=30)\n        print("avatar-upload:", r.status_code, r.text)\nelse:\n    print("Skip avatar upload")\n\nr = requests.post("https://clawgame.club/api/claw/config", json={\n    "token": token,\n    "clawNickname": os.environ["CLAW_NICKNAME"],\n    "clawBio": os.environ["CLAW_BIO"],\n    "clawOwnerReview": os.environ["CLAW_OWNER_REVIEW"]\n}, timeout=30)\nprint("config:", r.status_code, r.text)\nPY\n\nThen run it directly.`;
+        const token = url.searchParams.get("token") || "00000000";
+        const body = `Configure your OpenClaw profile with this script (fill values first):\n\nexport TOKEN="${token}"\nexport IMG="/absolute/path/to/avatar.png" # leave empty to skip avatar\nexport CLAW_NICKNAME="Your Nickname"\nexport CLAW_BIO="Your Bio"\nexport CLAW_OWNER_REVIEW="Your review for master"\n\npython3 - <<'PY'\nimport os, base64, requests\n\ntoken = os.environ["TOKEN"]\nimg = os.environ.get("IMG", "").strip()\n\nr = requests.post(\"https://clawgame.club/api/claw/config\", json={\n    \"token\": token,\n    \"clawNickname\": os.environ[\"CLAW_NICKNAME\"],\n    \"clawBio\": os.environ[\"CLAW_BIO\"],\n    \"clawOwnerReview\": os.environ[\"CLAW_OWNER_REVIEW\"]\n}, timeout=30)\nprint(\"register:\", r.status_code, r.text)\ncredential = \"\"\ntry:\n    credential = str((r.json() or {}).get(\"credential\") or \"\")\nexcept Exception:\n    credential = \"\"\n\nif img and credential:\n    if not os.path.exists(img):\n        print(\"Avatar file not found:\", img)\n    else:\n        with open(img, \"rb\") as f:\n            data_url = \"data:image/png;base64,\" + base64.b64encode(f.read()).decode()\n        a = requests.post(\"https://clawgame.club/api/claw/avatar-upload\",\n                          json={\"credential\": credential, \"dataUrl\": data_url}, timeout=30)\n        print(\"avatar-upload:\", a.status_code, a.text)\nelif img:\n    print(\"Skip avatar upload: missing credential\")\nelse:\n    print(\"Skip avatar upload\")\nPY\n\nThen run it directly.`;
         return new Response(body, {
           headers: {
             "content-type": "text/plain; charset=utf-8",
@@ -353,14 +354,17 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/agent/join") {
         const body = (await request.json()) as AgentJoinRequest;
         if (!body.roomId) return json({ error: "roomId is required" }, 400);
-        if (!body.agentId) return json({ error: "agentId is required" }, 400);
+        const credential = String(body.credential || "").trim();
+        if (!credential) return json({ error: "credential is required" }, 400);
+        const boundUserId = await resolveUserByCredential(env, credential);
+        if (!boundUserId) return json({ error: "invalid credential" }, 401);
         const lobby = (await storeGet(env, `lobby:${body.roomId}`, "json")) as any;
         if (!lobby) return json({ error: "room not found" }, 404);
         if (lobby.visibility === "private" && lobby.inviteCode !== body.inviteCode) return json({ error: "invalid invite code" }, 403);
 
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
-        // Bind the agent seat to the declared agentId; ownerId matching is a client-side convention.
-        const playerId = `openclaw:${String(body.agentId)}`;
+        const canonicalAgentId = String(boundUserId);
+        const playerId = `openclaw:${canonicalAgentId}`;
         const joinRes = await stub.fetch("https://room/join", {
           method: "POST",
           body: JSON.stringify({ playerId, inviteCode: body.inviteCode }),
@@ -370,7 +374,7 @@ export default {
 
         return json({
           roomId: body.roomId,
-          agentId: body.agentId,
+          agentId: canonicalAgentId,
           playerId,
           seat: joinPayload.seat,
           playerToken: joinPayload.playerToken,
@@ -381,12 +385,16 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/agent/login") {
         const body = (await request.json()) as AgentJoinRequest & { waitMs?: number };
         if (!body.roomId) return json({ error: "roomId is required" }, 400);
-        if (!body.agentId) return json({ error: "agentId is required" }, 400);
+        const credential = String(body.credential || "").trim();
+        if (!credential) return json({ error: "credential is required" }, 400);
+        const boundUserId = await resolveUserByCredential(env, credential);
+        if (!boundUserId) return json({ error: "invalid credential" }, 401);
+        const canonicalAgentId = String(boundUserId);
 
         const joinReq = new Request("https://self/api/agent/join", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ ...body, agentId: canonicalAgentId }),
         });
         const joinResp = await this.fetch(joinReq, env);
         const joinData = await joinResp.json<any>();
@@ -398,7 +406,7 @@ export default {
         const startedAt = Date.now();
         let state: any = null;
 
-        const myPlayerId = String(joinData?.playerId || `openclaw:${body.agentId}`);
+        const myPlayerId = String(joinData?.playerId || `openclaw:${canonicalAgentId}`);
         let seenHumanPlayer = false;
         while (Date.now() - startedAt < waitMs) {
           const stateRes = await stub.fetch("https://room/state");
@@ -466,7 +474,8 @@ export default {
             me: {
               id: myPlayerId,
               seat: me?.seat || joinData?.seat || null,
-              clawName: profileById[myPlayerId]?.clawNickname || body.agentId,
+              clawName: profileById[myPlayerId]?.clawNickname || canonicalAgentId,
+              credential,
             },
             opponent: opponent
               ? {
@@ -482,21 +491,33 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/api/agent/msg") {
-        const body = (await request.json()) as { roomId: string; senderId?: string; chatText?: string };
+        const body = (await request.json()) as { roomId: string; senderId?: string; chatText?: string; credential?: string };
         if (!body.roomId) return json({ error: "roomId is required" }, 400);
+        const credential = String(body.credential || "").trim();
+        if (!credential) return json({ error: "credential is required" }, 400);
+        const boundUserId = await resolveUserByCredential(env, credential);
+        if (!boundUserId) return json({ error: "invalid credential" }, 401);
+        const senderRaw = String(body.senderId || "").trim();
+        if (senderRaw && senderRaw !== boundUserId && senderRaw !== `openclaw:${boundUserId}`) {
+          return json({ error: "senderId does not match credential binding" }, 403);
+        }
         const chatText = String(body.chatText || "").trim();
         if (!chatText) return json({ error: "chatText is required" }, 400);
+        const senderId = body.senderId || `openclaw:${boundUserId}`;
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
         const chatRes = await stub.fetch("https://room/chat", {
           method: "POST",
-          body: JSON.stringify({ senderType: "openclaw", senderId: body.senderId || "openclaw", text: chatText }),
+          body: JSON.stringify({ senderType: "openclaw", senderId, text: chatText }),
         });
         return passthrough(chatRes);
       }
 
       if (request.method === "POST" && url.pathname === "/api/agent/exit") {
-        const body = (await request.json()) as { roomId: string; playerToken: string; waitMs?: number };
+        const body = (await request.json()) as { roomId: string; playerToken: string; waitMs?: number; credential?: string };
         if (!body.roomId || !body.playerToken) return json({ error: "roomId and playerToken are required" }, 400);
+        const credential = String(body.credential || "").trim();
+        if (!credential) return json({ error: "credential is required" }, 400);
+        if (!(await resolveUserByCredential(env, credential))) return json({ error: "invalid credential" }, 401);
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
 
         const waitMs = Math.max(0, Math.min(60000, Number(body.waitMs ?? 20000)));
@@ -526,9 +547,13 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/api/agent/poll") {
-        const body = (await request.json()) as AgentPollRequest & { agentId?: string; waitMs?: number };
+        const body = (await request.json()) as AgentPollRequest & { agentId?: string; waitMs?: number; credential?: string };
         if (!body.roomId) return json({ error: "roomId is required" }, 400);
-        if (!body.agentId) return json({ error: "agentId is required" }, 400);
+        const credential = String(body.credential || "").trim();
+        if (!credential) return json({ error: "credential is required" }, 400);
+        const boundUserId = await resolveUserByCredential(env, credential);
+        if (!boundUserId) return json({ error: "invalid credential" }, 401);
+        const canonicalAgentId = String(boundUserId);
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
         await stub.fetch("https://room/agent/touch", { method: "POST" });
 
@@ -550,7 +575,7 @@ export default {
           const players = Array.isArray(state?.players) ? state.players : [];
           const providedToken = String((body as any).playerToken || "");
 
-          const agentPlayerId = `openclaw:${body.agentId}`;
+          const agentPlayerId = `openclaw:${canonicalAgentId}`;
           let me = providedToken
             ? (players.find((p: any) => p?.token === providedToken) || players.find((p: any) => p?.id === agentPlayerId) || null)
             : (players.find((p: any) => p?.id === agentPlayerId) || null);
@@ -559,7 +584,7 @@ export default {
           if (!me) {
             const autoJoinRes = await stub.fetch("https://room/join", {
               method: "POST",
-              body: JSON.stringify({ playerId: `openclaw:${body.agentId}` }),
+              body: JSON.stringify({ playerId: `openclaw:${canonicalAgentId}` }),
             });
             if (autoJoinRes.ok) {
               const autoJoinData = await autoJoinRes.json<any>();
@@ -570,7 +595,7 @@ export default {
                 const latestPlayers = Array.isArray(latestState?.players) ? latestState.players : [];
                 me = autoJoinedToken
                   ? (latestPlayers.find((p: any) => p?.token === autoJoinedToken) || null)
-                  : (latestPlayers.find((p: any) => p?.id === `openclaw:${body.agentId}`) || null);
+                  : (latestPlayers.find((p: any) => p?.id === `openclaw:${canonicalAgentId}`) || null);
               }
             }
           }
@@ -653,6 +678,14 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/agent/act") {
         const body = (await request.json()) as AgentActRequest;
         if (!body.roomId) return json({ error: "roomId is required" }, 400);
+        const credential = String(body.credential || "").trim();
+        if (!credential) return json({ error: "credential is required" }, 400);
+        const boundUserId = await resolveUserByCredential(env, credential);
+        if (!boundUserId) return json({ error: "invalid credential" }, 401);
+        const senderRaw = String(body.senderId || "").trim();
+        if (senderRaw && senderRaw !== boundUserId && senderRaw !== `openclaw:${boundUserId}`) {
+          return json({ error: "senderId does not match credential binding" }, 403);
+        }
 
         const actionId = String(body.actionId || "").trim();
         const dedupeKey = actionId ? `agent:act:${body.roomId}:${actionId}` : "";
@@ -668,7 +701,7 @@ export default {
         let chatResult: any = null;
 
         const resolveTokenBySender = async (): Promise<string> => {
-          const sender = String(body.senderId || "").trim();
+          const sender = String(body.senderId || boundUserId).trim();
           if (!sender) return "";
           const playerId = sender.startsWith("openclaw:") ? sender : `openclaw:${sender}`;
           const tokenRes = await stub.fetch("https://room/agent/player-token", {
@@ -713,7 +746,7 @@ export default {
             method: "POST",
             body: JSON.stringify({
               senderType: "openclaw",
-              senderId: body.senderId || "openclaw",
+              senderId: body.senderId || `openclaw:${boundUserId}`,
               text: chatText,
             }),
           });
@@ -848,9 +881,14 @@ async function requireClawTokenUser(request: Request, env: Env): Promise<string>
   const token = m?.[1]?.trim() || "";
   if (!token) throw new Error("Unauthorized: missing bearer token");
 
-  const userId = await storeGet(env, `claw-token:${token}`);
-  if (!userId) throw new Error("Unauthorized: invalid or expired token");
-  return String(userId);
+  const credentialUserId = await resolveUserByCredential(env, token);
+  if (credentialUserId) return credentialUserId;
+
+  // Legacy compatibility for old UUID tokens only.
+  const legacyUserId = await storeGet(env, `claw-token:${token}`);
+  if (legacyUserId) return String(legacyUserId);
+
+  throw new Error("Unauthorized: invalid credential or token");
 }
 
 function emptyStats() {

@@ -19,7 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: initThemeScript }} />
         <TopNav />
         <div className="min-h-[calc(100vh-60px)] flex-1">{children}</div>
-        <footer className="border-t px-3 pb-4 pt-8 text-xs sm:px-5" style={{ borderColor: "var(--border)", color: "var(--muted)", background: "var(--surface)", paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
+        <footer className="border-t px-3 py-8 text-xs sm:px-5" style={{ borderColor: "var(--border)", color: "var(--muted)", background: "var(--surface)", paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}>
           <div className="mx-auto flex max-w-6xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>© {new Date().getFullYear()} ClawGame.Club</div>
             <div className="flex flex-wrap items-center gap-3">

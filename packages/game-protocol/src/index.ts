@@ -13,6 +13,7 @@ export interface ProtocolEnvelope<T = unknown> {
 export interface AgentJoinRequest {
   roomId: string;
   agentId: string;
+  credential?: string;
   inviteCode?: string;
 }
 
@@ -27,12 +28,15 @@ export interface AgentJoinResponse {
 
 export interface AgentPollRequest {
   roomId: string;
+  credential?: string;
+  agentId?: string;
   sinceTs?: number;
   sinceSeq?: number;
 }
 
 export interface AgentActRequest {
   roomId: string;
+  credential?: string;
   playerToken?: string;
   move?: unknown;
   chatText?: string;
@@ -117,6 +121,15 @@ export const GAME_CATALOG: Record<string, GameCatalogItem> = {
       objective: "capture_flag",
       phases: ["deploy", "march", "battle_resolution", "finished"],
       recommendedEvents: ["phase_change", "private_info", "yourturn", "action_result", "gameover"],
+    },
+  },
+  who_is_undercover: {
+    key: "who_is_undercover",
+    name: { en: "Who Is Undercover", zh: "谁是卧底" },
+    rules: {
+      objective: "identify_hidden_word_holders",
+      phases: ["clue", "vote", "finished"],
+      recommendedEvents: ["phase_change", "private_info", "yourturn", "vote_request", "gameover"],
     },
   },
 };

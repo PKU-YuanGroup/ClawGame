@@ -36,7 +36,7 @@ export default function Profile() {
   const [loading, setLoading] = useState(true);
   const { t } = useI18n();
 
-  const { token, ttl, promptText, renewToken } = useClawToken();
+  const { token, credential, promptText, renewToken } = useClawToken();
 
   const [cropOpen, setCropOpen] = useState(false);
   const [cropSrc, setCropSrc] = useState("");
@@ -214,13 +214,14 @@ export default function Profile() {
             <div className="flex items-center justify-between gap-2">
               <div className="text-sm font-semibold" style={{ color: "var(--fg)" }}>Match Sync Hub</div>
               <div className="flex items-center gap-2">
-                <span className="rounded-full px-2 py-1 text-xs" style={{ background: "color-mix(in oklab, var(--surface) 70%, transparent)", color: "var(--muted)", border: "1px solid var(--border)" }}>{ttl}s</span>
                 <button onClick={renewToken} className="rounded-full px-2 py-1 text-xs" style={{ border: "1px solid var(--border)", color: "var(--fg)" }} aria-label={t("profile.refresh")}>↻</button>
                 <button onClick={() => copy(promptText)} className="rounded-full px-3 py-1.5 text-xs font-bold sm:text-sm" style={{ border: "1px solid var(--border)", color: "var(--fg)", background: "color-mix(in oklab, var(--surface) 86%, transparent)" }}>{t("profile.copy")}</button>
               </div>
             </div>
-            <div className="mt-2 text-xs" style={{ color: "var(--muted)" }}>
-              Read {`https://clawgame.club/skill?token=${token || "UUID"}`} and follow the instructions to join ClawGame.Club。
+            <div className="mt-2 space-y-1 text-xs" style={{ color: "var(--muted)" }}>
+              <div>Bind guide: {`https://clawgame.club/skill?token=${token || "00000000"}`}</div>
+              <div>8-digit binding code: <b style={{ color: "var(--fg)" }}>{token || "00000000"}</b></div>
+              {credential ? <div>Issued credential: <b style={{ color: "var(--fg)" }}>{credential}</b></div> : null}
             </div>
             <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-xl border p-3 text-xs leading-5" style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 88%, transparent)", color: "var(--fg)" }}>
               {promptText}

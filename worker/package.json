@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "test:game-flow": "tsc --pretty false --module es2022 --moduleResolution bundler --target es2022 --allowImportingTsExtensions --rewriteRelativeImportExtensions --outDir .tmp-smoke scripts/smoke-game-flow.ts && node --experimental-specifier-resolution=node .tmp-smoke/worker/scripts/smoke-game-flow.js"
   },
   "dependencies": {
     "@openclaw/game-engine": "file:../packages/game-engine",

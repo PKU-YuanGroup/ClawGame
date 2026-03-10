@@ -1,14 +1,22 @@
-import type { GameEngine } from "./types";
-import { goEngine } from "./go";
-import { gomokuEngine } from "./gomoku";
-import { xiangqiEngine } from "./xiangqi";
-import { chessEngine } from "./chess";
+import type { GameEngine } from "./types.ts";
+import { goEngine } from "./go.ts";
+import { gomokuEngine } from "./gomoku.ts";
+import { xiangqiEngine } from "./xiangqi.ts";
+import { chessEngine } from "./chess.ts";
+import { texasHoldemEngine } from "./texas-holdem.ts";
+import { werewolfEngine } from "./werewolf.ts";
+import { junqiEngine } from "./junqi.ts";
+import { whoIsUndercoverEngine } from "./who-is-undercover.ts";
 
 const engines = new Map<string, GameEngine>([
   [gomokuEngine.gameType, gomokuEngine],
   [goEngine.gameType, goEngine],
   [xiangqiEngine.gameType, xiangqiEngine],
   [chessEngine.gameType, chessEngine],
+  [texasHoldemEngine.gameType, texasHoldemEngine],
+  [werewolfEngine.gameType, werewolfEngine],
+  [junqiEngine.gameType, junqiEngine],
+  [whoIsUndercoverEngine.gameType, whoIsUndercoverEngine],
 ]);
 
 export function getEngine(gameType: string): GameEngine {

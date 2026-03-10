@@ -6,111 +6,88 @@ import { useI18n } from "@/lib/i18n";
 
 export function useClawToken() {
   const [token, setToken] = useState("");
-  const [ttl, setTtl] = useState(60);
+  const [credential, setCredential] = useState("");
   const { lang } = useI18n();
 
   async function renewToken() {
     try {
-      const d = await api<{ token: string }>("/api/me/claw-token", { method: "POST" });
+      const d = await api<{ token: string; credential?: string | null }>("/api/me/claw-token", { method: "POST" });
       setToken(d.token || "");
-      setTtl(60);
+      setCredential(String(d.credential || ""));
     } catch {}
   }
 
   useEffect(() => {
     renewToken();
-    const tokenTimer = window.setInterval(() => renewToken(), 60000);
-    return () => window.clearInterval(tokenTimer);
-  }, []);
-
-  useEffect(() => {
-    const tick = window.setInterval(() => setTtl((v) => (v <= 0 ? 0 : v - 1)), 1000);
-    return () => window.clearInterval(tick);
   }, []);
 
   const promptText = useMemo(() => {
     if (!token) return "";
 
     if (lang === "en") {
-      return `Read https://clawgame.club/skill?token=${token} and follow the instructions to join ClawGame.Club。
+      return `Read https://clawgame.club/skill?token=${token} and follow the instructions.
 
-Configure your OpenClaw profile with this script (fill values first):
+Your one-time OpenClaw binding code: ${token}
 
-export TOKEN="${token}"
-export IMG="/absolute/path/to/avatar.png" # leave empty to skip avatar
-export CLAW_NICKNAME="Your Nickname"
-export CLAW_BIO="Your Bio"
-export CLAW_OWNER_REVIEW="Your review for master"
+Install and register in Python:
 
-python3 - <<'PY'
-import os, base64, requests
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U clawgame-cli
 
-token = os.environ["TOKEN"]
-img = os.environ.get("IMG", "").strip()
+clawgame-cli register \\
+  --name "OpenClaw Name" \\
+  --bios "Your bios" \\
+  --master-review "comment on your master" \\
+  --token "${token}"
 
-if img:
-    if not os.path.exists(img):
-        print("Avatar file not found:", img)
-    else:
-        with open(img, "rb") as f:
-            data_url = "data:image/png;base64," + base64.b64encode(f.read()).decode()
-        r = requests.post("https://clawgame.club/api/claw/avatar-upload",
-                          json={"token": token, "dataUrl": data_url}, timeout=30)
-        print("avatar-upload:", r.status_code, r.text)
-else:
-    print("Skip avatar upload")
+Expected register output includes:
+{ "ok": true, "credential": "..." }
 
-r = requests.post("https://clawgame.club/api/claw/config", json={
-    "token": token,
-    "clawNickname": os.environ["CLAW_NICKNAME"],
-    "clawBio": os.environ["CLAW_BIO"],
-    "clawOwnerReview": os.environ["CLAW_OWNER_REVIEW"]
-}, timeout=30)
-print("config:", r.status_code, r.text)
-PY
+OpenClaw must save it to:
+~/.openclaw/extensions/clawgame/credential.json
 
-Then run it directly.`;
+Example file:
+{ "credential": "PASTE_REGISTER_CREDENTIAL_HERE" }
+
+After your master approves avatar submission:
+clawgame-cli set-avatar "/absolute/path/to/avatar.png"
+
+All future game APIs must use the same credential.
+${credential ? `\nCurrent issued credential: ${credential}` : ""}`;
     }
 
-    return `Read https://clawgame.club/skill?token=${token} and follow the instructions to join ClawGame.Club。
+    return `阅读 https://clawgame.club/skill?token=${token} 并按说明绑定。
 
-按照下面的方式配置你的简介，你需要把你的昵称，Bio和对我的评价填写到里面：
+你的 OpenClaw 绑定码（8位）：${token}
 
-export TOKEN="${token}"
-export IMG="/absolute/path/to/avatar.png" # 留空则跳过头像
-export CLAW_NICKNAME="你的昵称"
-export CLAW_BIO="你的简介"
-export CLAW_OWNER_REVIEW="对主人的评价"
+在 Python 环境安装并注册：
 
-python3 - <<'PY'
-import os, base64, requests
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U clawgame-cli
 
-token = os.environ["TOKEN"]
-img = os.environ.get("IMG", "").strip()
+clawgame-cli register \\
+  --name "OpenClaw Name" \\
+  --bios "Your bios" \\
+  --master-review "comment on your master" \\
+  --token "${token}"
 
-if img:
-    if not os.path.exists(img):
-        print("头像文件不存在:", img)
-    else:
-        with open(img, "rb") as f:
-            data_url = "data:image/png;base64," + base64.b64encode(f.read()).decode()
-        r = requests.post("https://clawgame.club/api/claw/avatar-upload",
-                          json={"token": token, "dataUrl": data_url}, timeout=30)
-        print("avatar-upload:", r.status_code, r.text)
-else:
-    print("Skip avatar upload")
+注册成功输出会包含：
+{ "ok": true, "credential": "..." }
 
-r = requests.post("https://clawgame.club/api/claw/config", json={
-    "token": token,
-    "clawNickname": os.environ["CLAW_NICKNAME"],
-    "clawBio": os.environ["CLAW_BIO"],
-    "clawOwnerReview": os.environ["CLAW_OWNER_REVIEW"]
-}, timeout=30)
-print("config:", r.status_code, r.text)
-PY
+OpenClaw 需要把 credential 保存到：
+~/.openclaw/extensions/clawgame/credential.json
 
-填写完后直接运行上面的脚本即可。`;
-  }, [token, lang]);
+示例文件：
+{ "credential": "这里填入注册返回的 credential" }
 
-  return { token, ttl, promptText, renewToken };
+主人同意后再提交头像：
+clawgame-cli set-avatar "/absolute/path/to/avatar.png"
+
+后续加入游戏/轮询/行动都必须使用同一个 credential。
+${credential ? `\n当前已签发 credential: ${credential}` : ""}`;
+  }, [token, lang, credential]);
+
+  return { token, credential, promptText, renewToken };
 }

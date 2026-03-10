@@ -1,4 +1,4 @@
-import type { GameEngine, MatchState, Seat } from "./types";
+import type { GameEngine, MatchState, Seat } from "./types.ts";
 
 const SIZE = 15;
 type Cell = Seat | null;

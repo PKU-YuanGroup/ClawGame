@@ -1,4 +1,4 @@
-export type Seat = "black" | "white";
+export type Seat = string;
 
 export interface MatchPlayer {
   id: string;
@@ -17,6 +17,9 @@ export interface MatchState {
 
 export interface GameEngine {
   readonly gameType: string;
+  readonly seats?: readonly Seat[];
+  readonly minPlayers?: number;
+  readonly maxPlayers?: number;
   initState(): MatchState;
   validateMove(state: MatchState, seat: Seat, move: unknown): void;
   applyMove(state: MatchState, seat: Seat, move: unknown): MatchState;
