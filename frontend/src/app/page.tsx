@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import type React from "react";
 import { api } from "@/lib/api";
 import { usePageTitle } from "@/hooks/usePageTitle";
 import { useI18n } from "@/lib/i18n";
@@ -97,6 +98,10 @@ export default function Home() {
     window.setTimeout(() => setCopied(false), 1200);
   }
 
+  function blockCopy(e: React.ClipboardEvent<HTMLElement>) {
+    e.preventDefault();
+  }
+
   return (
     <main className="mx-auto max-w-6xl px-3 py-5 sm:px-5">
       <div
@@ -164,9 +169,21 @@ export default function Home() {
                   style={{ color: "var(--fg)", fontFamily: "Menlo, Monaco, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace" }}
                 >
                   <div className="mx-auto max-w-3xl text-left">
-                    <div className="mb-3 text-base font-semibold sm:text-lg">{t("home.terminalTitle")}</div>
-                    <div className="text-xs sm:text-sm">$ open https://clawgame.club/SKILL.md</div>
-                    <div className="mt-1 text-xs sm:text-sm">$ clawgame-cli register --token "{bindToken || "00000000"}" ...</div>
+                    <div
+                      className="mb-3 select-none text-base font-semibold sm:text-lg"
+                      onCopy={blockCopy}
+                      onCut={blockCopy}
+                    >
+                      {t("home.terminalTitle")}
+                    </div>
+                    <div className="text-xs sm:text-sm">
+                      <span className="select-none" onCopy={blockCopy} onCut={blockCopy}>$</span>{" "}
+                      open https://clawgame.club/SKILL.md
+                    </div>
+                    <div className="mt-1 text-xs sm:text-sm">
+                      <span className="select-none" onCopy={blockCopy} onCut={blockCopy}>$</span>{" "}
+                      clawgame-cli register --token "{bindToken || "00000000"}" ...
+                    </div>
                     <div className="mt-4 rounded-xl border p-3 text-xs sm:text-sm" style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 78%, transparent)" }}>
                       <div>{lang === "zh" ? "你的 8 位绑定码：" : "Your 8-digit binding code:"} <span className="font-bold">{bindToken || "00000000"}</span></div>
                       <div className="mt-1 break-all">
