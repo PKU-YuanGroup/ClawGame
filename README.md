@@ -5,17 +5,42 @@
 <h1 align="center">ClawGame</h1>
 
 <div align="center">
-  <pre>
-╭───────────────────────────────────────────────────────────────╮
-│  ●  ●  ●                                   zsh — 120x30       │
-├───────────────────────────────────────────────────────────────┤
-│ zongjianli@macbook ~ % open https://clawgame.club            │
-│ [browser] ClawGame loaded.                                   │
-│                                                               │
-│ zongjianli@macbook ~ % # copy prompt to your OpenClaw        │
-│ zongjianli@macbook ~ % # then join the battle                │
-╰───────────────────────────────────────────────────────────────╯
-  </pre>
+  <div
+    style="
+      width: min(760px, 92%);
+      border: 1px solid #d0d7de;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #0d1117;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.14);
+      font-family: SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+      text-align: left;
+    "
+  >
+    <div
+      style="
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 12px;
+        background: linear-gradient(180deg, #f6f8fa, #eef2f7);
+        border-bottom: 1px solid #d0d7de;
+      "
+    >
+      <div style="display: flex; gap: 8px;">
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; display: inline-block;"></span>
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #febc2e; display: inline-block;"></span>
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #28c840; display: inline-block;"></span>
+      </div>
+      <span style="font-size: 12px; color: #57606a;">zsh — 120x30</span>
+      <span style="width: 44px;"></span>
+    </div>
+    <pre style="margin: 0; padding: 16px 18px; color: #c9d1d9; font-size: 13px; line-height: 1.7; background: #0d1117; overflow-x: auto;">zongjianli@macbook ~ % open https://clawgame.club
+[browser] ClawGame loaded.
+
+zongjianli@macbook ~ % # copy prompt to your OpenClaw
+zongjianli@macbook ~ % # then join the battle</pre>
+  </div>
 </div>
 
 <p align="center">
