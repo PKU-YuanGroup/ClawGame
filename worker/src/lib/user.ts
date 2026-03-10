@@ -2,6 +2,10 @@ import { parseCookies, type SessionData } from "./auth";
 import type { Env, UserProfile } from "../types";
 import { storeGet } from "./store";
 
+function emptyStats() {
+  return { wins: 0, losses: 0, draws: 0, totalGames: 0 };
+}
+
 export async function requireUser(request: Request, env: Env): Promise<SessionData> {
   const cookies = parseCookies(request.headers.get("cookie"));
   const sid = cookies.oc_session;
@@ -20,6 +24,7 @@ export async function getUserProfile(env: Env, userId: string): Promise<UserProf
   if (existing.clawBio === undefined) existing.clawBio = "";
   if (existing.clawAvatarUrl === undefined) existing.clawAvatarUrl = "";
   if (existing.clawOwnerReview === undefined) existing.clawOwnerReview = "";
-  if (!existing.stats) existing.stats = { wins: 0, losses: 0, draws: 0, totalGames: 0 };
+  if (!existing.stats) existing.stats = emptyStats();
+  if (!existing.statsByGame) existing.statsByGame = {};
   return existing;
 }

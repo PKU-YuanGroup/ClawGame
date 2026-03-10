@@ -4,7 +4,7 @@ import { handleAuthRoutes } from "./routes/auth";
 import { handleProfileRoutes } from "./routes/profile";
 import { json, passthrough, shortCode, wsBaseFromRequest } from "./lib/http";
 import { AGENT_EVENT_TYPES } from "./lib/agent-events";
-import { requireUser } from "./lib/user";
+import { getUserProfile, requireUser } from "./lib/user";
 import { storeGet, storeList, storePut } from "./lib/store";
 import type { Env, LeaderboardEntry, UserProfile } from "./types";
 import { getGameRules, type AgentActRequest, type AgentJoinRequest, type AgentPollRequest } from "@openclaw/game-protocol";
@@ -150,6 +150,15 @@ export default {
         const list = await storeList(env, { prefix: "lobby:" });
         const rooms = await Promise.all(list.keys.map(async (k) => (await storeGet(env, k.name, "json")) as any));
         return json(rooms.filter((r) => r?.visibility === "public" && (!gameType || r.gameType === gameType)));
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/lobby/overview") {
+        const gameType = String(url.searchParams.get("gameType") || "gomoku");
+        const [rooms, leaderboard] = await Promise.all([
+          buildLobbyOverview(request, env, gameType),
+          buildLeaderboardView(env, gameType),
+        ]);
+        return json({ gameType, rooms, leaderboard });
       }
 
       if (request.method === "GET" && url.pathname === "/api/matches/live") {
@@ -765,8 +774,7 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/api/leaderboard") {
         const gameType = url.searchParams.get("gameType") || "gomoku";
-        const data = ((await storeGet(env, `lb:${gameType}`, "json")) as LeaderboardEntry[]) ?? [];
-        return json(data.slice(0, 100));
+        return json(await buildLeaderboardView(env, gameType));
       }
 
       if (request.method === "POST" && url.pathname === "/api/leaderboard/report") {
@@ -845,6 +853,164 @@ async function requireClawTokenUser(request: Request, env: Env): Promise<string>
   return String(userId);
 }
 
+function emptyStats() {
+  return { wins: 0, losses: 0, draws: 0, totalGames: 0 };
+}
+
+function normalizeProfileName(profile: UserProfile | null, userId: string): string {
+  if (!profile) return userId;
+  return String(profile.nickname || profile.username || profile.name || profile.login || userId);
+}
+
+function summarizeProfile(profile: UserProfile | null, userId: string) {
+  if (!profile) {
+    return {
+      userId,
+      username: userId,
+      avatarUrl: "",
+      openclawName: "Claw",
+      openclawAvatarUrl: "",
+    };
+  }
+  return {
+    userId,
+    username: normalizeProfileName(profile, userId),
+    avatarUrl: String(profile.avatarUrl || ""),
+    openclawName: String(profile.clawNickname || "Claw"),
+    openclawAvatarUrl: String(profile.clawAvatarUrl || ""),
+  };
+}
+
+function getGameStats(profile: UserProfile | null, gameType: string) {
+  if (!profile?.statsByGame?.[gameType]) return emptyStats();
+  return {
+    wins: Number(profile.statsByGame[gameType].wins || 0),
+    losses: Number(profile.statsByGame[gameType].losses || 0),
+    draws: Number(profile.statsByGame[gameType].draws || 0),
+    totalGames: Number(profile.statsByGame[gameType].totalGames || 0),
+  };
+}
+
+async function getProfileOrNull(env: Env, userId: string): Promise<UserProfile | null> {
+  if (!userId) return null;
+  try {
+    return await getUserProfile(env, userId);
+  } catch {
+    return null;
+  }
+}
+
+async function buildLeaderboardView(env: Env, gameType: string) {
+  const data = ((await storeGet(env, `lb:${gameType}`, "json")) as LeaderboardEntry[]) ?? [];
+  const rows = await Promise.all(
+    data.map(async (entry) => {
+      const profile = await getProfileOrNull(env, entry.userId);
+      const overall = profile?.stats ?? emptyStats();
+      const gameStats = getGameStats(profile, gameType);
+      return {
+        userId: entry.userId,
+        rating: entry.rating,
+        wins: gameStats.wins,
+        losses: gameStats.losses,
+        draws: gameStats.draws,
+        totalGames: gameStats.totalGames,
+        overallWins: Number(overall.wins || 0),
+        overallTotalGames: Number(overall.totalGames || 0),
+        profile: summarizeProfile(profile, entry.userId),
+      };
+    }),
+  );
+
+  return rows
+    .sort((a, b) => {
+      if (b.wins !== a.wins) return b.wins - a.wins;
+      if (b.totalGames !== a.totalGames) return b.totalGames - a.totalGames;
+      return b.rating - a.rating;
+    })
+    .slice(0, 100);
+}
+
+async function buildLobbyOverview(request: Request, env: Env, gameType: string) {
+  const list = await storeList(env, { prefix: "lobby:" });
+  const lobbies = await Promise.all(list.keys.map(async (k) => (await storeGet(env, k.name, "json")) as any));
+  const rooms = await Promise.all(
+    lobbies
+      .filter((room) => room?.visibility === "public" && room?.gameType === gameType)
+      .map(async (room) => {
+        const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(room.roomId));
+        const [stateRes, onlineRes] = await Promise.all([
+          stub.fetch("https://room/state"),
+          stub.fetch("https://room/online"),
+        ]);
+        if (!stateRes.ok || !onlineRes.ok) return null;
+
+        const snapshot = await stateRes.json<any>();
+        const online = await onlineRes.json<any>();
+        const ownerId = String(snapshot?.ownerId || room.ownerId || "");
+        const ownerProfile = ownerId ? await getProfileOrNull(env, ownerId) : null;
+        const onlineUsers = Array.isArray(online?.users) ? online.users : [];
+        const onlineOpenclaw = Array.isArray(online?.openclaw) ? online.openclaw : [];
+        const participantIds = Array.from(
+          new Set(
+            [...onlineUsers.map((item: any) => String(item?.id || "")), ...onlineOpenclaw.map((item: any) => String(item?.id || "").replace(/^openclaw:/, ""))]
+              .filter(Boolean),
+          ),
+        );
+        const profileMap = new Map(
+          (await Promise.all(participantIds.map(async (id) => [id, await getProfileOrNull(env, id)] as const))),
+        );
+
+        const onlinePlayers = [
+          ...onlineUsers.map((item: any) => {
+            const userId = String(item?.id || "");
+            const profile = profileMap.get(userId) || null;
+            return {
+              id: userId,
+              type: "user",
+              seat: String(item?.seat || ""),
+              displayName: normalizeProfileName(profile, userId),
+              avatarUrl: String(profile?.avatarUrl || ""),
+            };
+          }),
+          ...onlineOpenclaw.map((item: any) => {
+            const rawId = String(item?.id || "");
+            const userId = rawId.replace(/^openclaw:/, "");
+            const profile = profileMap.get(userId) || null;
+            return {
+              id: rawId,
+              type: "openclaw",
+              seat: String(item?.seat || ""),
+              displayName: String(profile?.clawNickname || normalizeProfileName(profile, userId)),
+              avatarUrl: String(profile?.clawAvatarUrl || profile?.avatarUrl || ""),
+            };
+          }),
+        ];
+
+        return {
+          roomId: String(room.roomId),
+          gameType: String(room.gameType),
+          createdAt: Number(room.createdAt || 0),
+          status: String(snapshot?.state?.status || "waiting"),
+          ownerId,
+          owner: summarizeProfile(ownerProfile, ownerId),
+          onlineCount: onlinePlayers.length,
+          spectatorCount: Array.isArray(online?.spectators) ? online.spectators.length : 0,
+          onlinePlayers,
+        };
+      }),
+  );
+
+  return rooms
+    .filter(Boolean)
+    .sort((a: any, b: any) => {
+      const aPlaying = a.status === "playing" ? 1 : 0;
+      const bPlaying = b.status === "playing" ? 1 : 0;
+      if (bPlaying !== aPlaying) return bPlaying - aPlaying;
+      if (b.onlineCount !== a.onlineCount) return b.onlineCount - a.onlineCount;
+      return b.createdAt - a.createdAt;
+    });
+}
+
 async function updateLeaderboard(
   env: Env,
   gameType: string,
@@ -882,9 +1048,10 @@ async function updateLeaderboard(
     sorted.slice(0, 100).map(async (entry, idx) => {
       const profile = (await storeGet(env, `user:${entry.userId}`, "json")) as UserProfile | null;
       if (!profile) return;
+      const badges = Array.isArray(profile.badges) ? profile.badges : [];
       const badge = `${gameType}榜 #${idx + 1}`;
-      if (!profile.badges.includes(badge)) {
-        profile.badges = [...profile.badges, badge].slice(-20);
+      if (!badges.includes(badge)) {
+        profile.badges = [...badges, badge].slice(-20);
         profile.updatedAt = Date.now();
         await storePut(env, `user:${entry.userId}`, JSON.stringify(profile));
       }
@@ -900,24 +1067,33 @@ async function updateLeaderboard(
     Array.from(touched).map(async (userId) => {
       const profile = (await storeGet(env, `user:${userId}`, "json")) as UserProfile | null;
       if (!profile) return;
-      const stats = profile.stats ?? { wins: 0, losses: 0, draws: 0, totalGames: 0 };
+      const stats = profile.stats ?? emptyStats();
+      const statsByGame = profile.statsByGame ?? {};
+      const gameStats = statsByGame[gameType] ?? emptyStats();
 
       if (draw) {
         if (playerIds.includes(userId)) {
           stats.draws += 1;
           stats.totalGames += 1;
+          gameStats.draws += 1;
+          gameStats.totalGames += 1;
         }
       } else {
         if (winnerId && userId === winnerId) {
           stats.wins += 1;
           stats.totalGames += 1;
+          gameStats.wins += 1;
+          gameStats.totalGames += 1;
         } else if (loserId && userId === loserId) {
           stats.losses += 1;
           stats.totalGames += 1;
+          gameStats.losses += 1;
+          gameStats.totalGames += 1;
         }
       }
 
       profile.stats = stats;
+      profile.statsByGame = { ...statsByGame, [gameType]: gameStats };
       profile.updatedAt = Date.now();
       await storePut(env, `user:${userId}`, JSON.stringify(profile));
     }),

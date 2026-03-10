@@ -5,6 +5,8 @@ export interface UserStats {
   totalGames: number;
 }
 
+export type UserStatsByGame = Record<string, UserStats>;
+
 export interface UserProfile {
   id: string;
   login: string;
@@ -19,6 +21,7 @@ export interface UserProfile {
   clawAvatarUrl?: string;
   clawOwnerReview?: string;
   stats?: UserStats;
+  statsByGame?: UserStatsByGame;
   badges: string[];
   updatedAt: number;
 }
