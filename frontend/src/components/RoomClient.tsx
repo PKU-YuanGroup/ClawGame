@@ -32,6 +32,8 @@ type Me = {
   avatarUrl?: string;
   clawNickname?: string;
   clawAvatarUrl?: string;
+  clawBio?: string;
+  clawOwnerReview?: string;
   badgeDetails?: Array<{ id?: string; nameZh?: string; nameEn?: string; imageUrl?: string }>;
 };
 type RoomEvent = ProtocolEnvelope<{ messages?: ChatMessage[]; users?: OnlineItem[]; openclaw?: OnlineItem[]; spectators?: OnlineItem[] } | ChatMessage>;
@@ -134,10 +136,14 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const [roomResetting, setRoomResetting] = useState(false);
   const [roomLeaving, setRoomLeaving] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
+  const [showBindGuard, setShowBindGuard] = useState(false);
   const myOpenclawId = me?.id ? `openclaw:${me.id}` : "";
   const myOpenclawJoined = Boolean(myOpenclawId)
     && Array.isArray(snapshot?.players)
     && snapshot.players.some((p: any) => p?.id === myOpenclawId);
+  const hasBoundOpenClaw = Boolean(
+    me?.id && String(me?.clawBio || "").trim() && String(me?.clawOwnerReview || "").trim(),
+  );
   const reconnectTimerRef = useRef<number | null>(null);
   const retryRef = useRef(0);
   const pingTimerRef = useRef<number | null>(null);
@@ -483,6 +489,10 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
   async function joinGame() {
     if (!me?.id || !roomId || joining) return;
+    if (!hasBoundOpenClaw) {
+      setShowBindGuard(true);
+      return;
+    }
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       pushToast(t("room.toastWsNotConnected"), "error");
       return;
@@ -745,7 +755,8 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const joinedAsPlayer = Boolean(playerToken) && myOpenclawJoined;
   const gameState = snapshot?.state || {};
   const ownerId = String(snapshot?.ownerId || "");
-  const isOwner = Boolean(me?.id) && ownerId === me?.id;
+  const isOwner = Boolean(me?.id)
+    && (ownerId === me?.id || normalizeProfileId(ownerId) === normalizeProfileId(me?.id));
   const canChat = joinedAsPlayer || isOwner;
   const openclawParticipantIds = new Set<string>(
     (Array.isArray(snapshot?.players) ? snapshot.players : [])
@@ -1617,6 +1628,40 @@ export function RoomClient({ roomId }: { roomId: string }) {
             ) : (
               <div className="mt-3 text-xs text-slate-400">{t("room.master")}: {profileCardOwnerId ? displayNameById(profileCardOwnerId) : "-"}</div>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {showBindGuard ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-4" onClick={() => setShowBindGuard(false)}>
+          <div
+            className="w-full max-w-md rounded-2xl border p-5"
+            style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 96%, transparent)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-base font-semibold" style={{ color: "var(--fg)" }}>
+              {t("bindGuard.title")}
+            </div>
+            <div className="mt-2 text-sm" style={{ color: "var(--muted)" }}>
+              {t("bindGuard.desc")}
+            </div>
+            <div className="mt-4 flex gap-2">
+              <a
+                href="/"
+                className="inline-flex rounded-full px-4 py-2 text-sm font-semibold"
+                style={{ background: "var(--accent)", color: "#fff" }}
+              >
+                {t("bindGuard.backHome")}
+              </a>
+              <button
+                type="button"
+                className="inline-flex rounded-full border px-4 py-2 text-sm"
+                style={{ borderColor: "var(--border)", color: "var(--fg)" }}
+                onClick={() => setShowBindGuard(false)}
+              >
+                {t("bindGuard.skip")}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

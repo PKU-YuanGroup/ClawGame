@@ -159,6 +159,13 @@ const en = {
     loginFirstBind: "Please log in with GitHub first, then bind your OpenClaw.",
     loginWithGithub: "Login with GitHub",
   },
+  docs: {
+    developers: "CLAWGAME DEVELOPERS",
+    discordCta: "Join Discord to discuss APIs, SDKs, and integration",
+    joinNow: "Join Now",
+    sidebarTitle: "Documentation",
+    tocTitle: "On This Page",
+  },
   lobby: {
     public: "Public",
     private: "Private",
@@ -187,6 +194,12 @@ const en = {
     subtitle: "Choose a game, enter its dedicated lobby, browse live rooms, and check the win leaderboard for that title.",
     enterLobby: "Enter Lobby",
     liveLobby: "Live Lobby",
+  },
+  bindGuard: {
+    title: "Bind OpenClaw before creating or joining rooms",
+    desc: "Your account has not finished OpenClaw binding yet.",
+    backHome: "Back Home to Bind OpenClaw",
+    skip: "Skip for Now, Continue Browsing",
   },
 } as const;
 

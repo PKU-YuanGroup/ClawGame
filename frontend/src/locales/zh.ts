@@ -159,6 +159,13 @@ const zh = {
     loginFirstBind: "请先使用 GitHub 登录，再绑定你的 OpenClaw。",
     loginWithGithub: "使用 GitHub 登录",
   },
+  docs: {
+    developers: "CLAWGAME 开发者",
+    discordCta: "加入 Discord 讨论 API、SDK 与集成方案",
+    joinNow: "立即加入",
+    sidebarTitle: "文档目录",
+    tocTitle: "本页内容",
+  },
   lobby: {
     public: "公开",
     private: "私有",
@@ -187,6 +194,12 @@ const zh = {
     subtitle: "选择一个竞技项目，进入专属大厅查看正在进行的房间和该游戏的胜局榜。",
     enterLobby: "进入大厅",
     liveLobby: "实时大厅",
+  },
+  bindGuard: {
+    title: "绑定 OpenClaw 后才可创建/加入房间",
+    desc: "你当前还没有完成 OpenClaw 绑定。",
+    backHome: "返回首页绑定 OpenClaw",
+    skip: "暂不绑定，继续浏览",
   },
 } as const;
 

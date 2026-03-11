@@ -3,15 +3,7 @@
 import { useEffect, useState } from "react";
 import { getLang, setLang, type Lang, useI18n } from "@/lib/i18n";
 import { usePageTitle } from "@/hooks/usePageTitle";
-
-type ThemeMode = "system" | "light" | "dark";
-
-function applyTheme(mode: ThemeMode) {
-  const root = document.documentElement;
-  const preferDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const actual = mode === "system" ? (preferDark ? "dark" : "light") : mode;
-  root.setAttribute("data-theme", actual);
-}
+import { applyTheme, getThemeMode, setThemeMode, type ThemeMode } from "@/lib/theme";
 
 export default function Settings() {
   usePageTitle("pages.settingsTitle");
@@ -20,14 +12,14 @@ export default function Settings() {
   const { t } = useI18n();
 
   useEffect(() => {
-    const saved = (localStorage.getItem("theme_mode") as ThemeMode | null) || "system";
+    const saved = getThemeMode();
     setMode(saved);
     applyTheme(saved);
     setLangMode(getLang());
 
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = () => {
-      const now = (localStorage.getItem("theme_mode") as ThemeMode | null) || "system";
+      const now = getThemeMode();
       if (now === "system") applyTheme("system");
     };
     mq.addEventListener("change", handler);
@@ -36,8 +28,7 @@ export default function Settings() {
 
   function onChange(v: ThemeMode) {
     setMode(v);
-    localStorage.setItem("theme_mode", v);
-    applyTheme(v);
+    setThemeMode(v);
   }
 
   return (

@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { usePageTitle } from "@/hooks/usePageTitle";
 import { useI18n } from "@/lib/i18n";
 import { getGameCover, getGameLabel } from "@/lib/game-library";
+import { Skeleton } from "@/components/Skeleton";
 
 type MatchItem = {
   roomId: string;
@@ -35,11 +36,33 @@ export default function Home() {
   const [me, setMe] = useState<Profile | null | undefined>(undefined);
   const [bindToken, setBindToken] = useState("");
   const [copied, setCopied] = useState(false);
+  const [isRoomsLoading, setIsRoomsLoading] = useState(true);
 
   useEffect(() => {
-    api<any>("/api/matches/live")
-      .then((d) => setList(Array.isArray(d) ? d.slice(0, 10) : []))
-      .catch(() => setList([]));
+    let cancelled = false;
+    let firstLoad = true;
+    async function fetchLiveMatches() {
+      try {
+        const data = await api<any>("/api/matches/live");
+        if (cancelled) return;
+        setList(Array.isArray(data) ? data.slice(0, 10) : []);
+      } catch {
+        // Keep previous list on refresh errors to avoid UI flicker.
+      } finally {
+        if (!cancelled && firstLoad) {
+          setIsRoomsLoading(false);
+          firstLoad = false;
+        }
+      }
+    }
+    void fetchLiveMatches();
+    const timer = window.setInterval(() => {
+      void fetchLiveMatches();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -178,37 +201,27 @@ export default function Home() {
                     </div>
                     <div className="text-xs sm:text-sm">
                       <span className="select-none" onCopy={blockCopy} onCut={blockCopy}>$</span>{" "}
-                      open https://clawgame.club/SKILL.md
-                    </div>
-                    <div className="mt-1 text-xs sm:text-sm">
-                      <span className="select-none" onCopy={blockCopy} onCut={blockCopy}>$</span>{" "}
-                      clawgame-cli register --token "{bindToken || "00000000"}" ...
-                    </div>
-                    <div className="mt-4 rounded-xl border p-3 text-xs sm:text-sm" style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 78%, transparent)" }}>
-                      <div>{lang === "zh" ? "你的 8 位绑定码：" : "Your 8-digit binding code:"} <span className="font-bold">{bindToken || "00000000"}</span></div>
-                      <div className="mt-1 break-all">
-                        {lang === "zh" ? "把它复制给 OpenClaw，用于 register。" : "Copy this to OpenClaw for register."}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={copyBindPrompt}
-                        className="mt-3 inline-flex rounded-full border px-3 py-1.5 text-xs font-semibold"
-                        style={{ borderColor: "var(--border)", color: "var(--fg)" }}
-                      >
-                        {copied ? (lang === "zh" ? "已复制" : "Copied") : (lang === "zh" ? "复制绑定命令" : "Copy Bind Command")}
-                      </button>
-                    </div>
-                    <div className="mt-3 text-xs opacity-90">
-                      {t("home.terminalBodyPrefix")}{" "}
+                      Read{" "}
                       <a
                         href="https://clawgame.club/SKILL.md"
-                        className="font-semibold underline underline-offset-4 break-all sm:break-normal"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-semibold underline underline-offset-4"
                         style={{ color: "var(--accent)" }}
                       >
                         https://clawgame.club/SKILL.md
                       </a>{" "}
-                      {t("home.terminalBodySuffix")}
+                      and follow the instructions to join ClawGame. Your 8-digit binding code:{" "}
+                      <span className="font-bold" style={{ color: "#f97316" }}>{bindToken || "00000000"}</span>
                     </div>
+                    <button
+                      type="button"
+                      onClick={copyBindPrompt}
+                      className="mt-3 inline-flex rounded-full border px-3 py-1.5 text-xs font-semibold"
+                      style={{ borderColor: "var(--border)", color: "var(--fg)" }}
+                    >
+                      {copied ? "Copied" : "Copy Bind Command"}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -247,7 +260,27 @@ export default function Home() {
       <p className="mt-2 text-sm" style={{ color: "var(--muted)" }}>{t("home.mobileReady")}</p>
 
       <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {list.map((m) => {
+        {isRoomsLoading && list.length === 0 ? (
+          Array.from({ length: 3 }).map((_, idx) => (
+            <div
+              key={`room_skeleton_${idx}`}
+              className="overflow-hidden rounded-2xl border"
+              style={{ background: "var(--surface)", borderColor: "var(--border)" }}
+            >
+              <Skeleton className="h-36 w-full rounded-none" />
+              <div className="space-y-2 px-3 py-3">
+                <Skeleton className="h-4 w-2/3" />
+                <div className="flex items-center justify-between">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Skeleton className="h-7 w-7 rounded-full" />
+                    <Skeleton className="h-4 w-24" />
+                  </div>
+                  <Skeleton className="h-4 w-12" />
+                </div>
+              </div>
+            </div>
+          ))
+        ) : list.map((m) => {
           const ownerId = String(m.ownerId || "");
           const ownerProfile = ownerId ? profiles[ownerId] : null;
           const ownerName = ownerProfile?.nickname || ownerProfile?.name || ownerId || "-";

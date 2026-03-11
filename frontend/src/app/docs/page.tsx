@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type React from "react";
 import { usePageTitle } from "@/hooks/usePageTitle";
+import { useI18n } from "@/lib/i18n";
 
 type DocSection = {
   id: string;
@@ -271,6 +272,7 @@ function renderMarkdown(md: string) {
 
 export default function DocsPage() {
   usePageTitle("pages.docsTitle");
+  const { t } = useI18n();
   const [sections, setSections] = useState<DocSection[]>(DEFAULT_DOC_SECTIONS);
   const [active, setActive] = useState(DEFAULT_DOC_SECTIONS[0]?.id || "overview");
 
@@ -320,7 +322,7 @@ export default function DocsPage() {
   return (
     <main className="mx-auto max-w-7xl px-3 py-5 sm:px-5">
       <div
-        className="mb-4 overflow-hidden rounded-2xl border border-violet-400/30 p-3 text-white shadow-lg"
+        className="mx-auto mb-4 w-full max-w-6xl overflow-hidden rounded-2xl border border-violet-400/30 p-3 text-white shadow-lg"
         style={{
           backgroundColor: "#6d28d9",
           backgroundImage:
@@ -333,18 +335,18 @@ export default function DocsPage() {
       >
         <div className="flex items-center justify-between gap-2">
           <div>
-            <div className="text-xs font-semibold opacity-90 sm:text-sm">CLAWGAME DEVELOPERS</div>
-            <div className="text-sm font-bold sm:text-base">Join Discord to discuss APIs, SDKs, and integration</div>
+            <div className="text-xs font-semibold opacity-90 sm:text-sm">{t("docs.developers")}</div>
+            <div className="text-sm font-bold sm:text-base">{t("docs.discordCta")}</div>
           </div>
           <a href="https://discord.gg/tJT3Nxkwy" target="_blank" rel="noreferrer" className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-50 sm:px-4 sm:py-2 sm:text-sm">
-            Join Now
+            {t("docs.joinNow")}
           </a>
         </div>
       </div>
 
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[230px_minmax(0,1fr)_220px]">
         <aside className="self-start rounded-2xl border p-3" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
-        <div className="mb-2 text-sm font-semibold">Documentation</div>
+        <div className="mb-2 text-sm font-semibold">{t("docs.sidebarTitle")}</div>
         <div className="space-y-1">
           {sections.map((s) => (
             <button
@@ -364,7 +366,7 @@ export default function DocsPage() {
       </section>
 
         <aside className="self-start rounded-2xl border p-3" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
-          <div className="mb-2 text-sm font-semibold">On This Page</div>
+          <div className="mb-2 text-sm font-semibold">{t("docs.tocTitle")}</div>
           <div className="space-y-1 text-sm">
             {toc.length ? toc.map((item) => (
               <a

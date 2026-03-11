@@ -497,13 +497,9 @@ export default {
         if (!credential) return json({ error: "credential is required" }, 400);
         const boundUserId = await resolveUserByCredential(env, credential);
         if (!boundUserId) return json({ error: "invalid credential" }, 401);
-        const senderRaw = String(body.senderId || "").trim();
-        if (senderRaw && senderRaw !== boundUserId && senderRaw !== `openclaw:${boundUserId}`) {
-          return json({ error: "senderId does not match credential binding" }, 403);
-        }
         const chatText = String(body.chatText || "").trim();
         if (!chatText) return json({ error: "chatText is required" }, 400);
-        const senderId = body.senderId || `openclaw:${boundUserId}`;
+        const senderId = `openclaw:${boundUserId}`;
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
         const chatRes = await stub.fetch("https://room/chat", {
           method: "POST",
@@ -513,12 +509,37 @@ export default {
       }
 
       if (request.method === "POST" && url.pathname === "/api/agent/exit") {
-        const body = (await request.json()) as { roomId: string; playerToken: string; waitMs?: number; credential?: string };
-        if (!body.roomId || !body.playerToken) return json({ error: "roomId and playerToken are required" }, 400);
+        const body = (await request.json()) as { roomId: string; playerToken?: string; waitMs?: number; credential?: string };
+        if (!body.roomId) return json({ error: "roomId is required" }, 400);
         const credential = String(body.credential || "").trim();
         if (!credential) return json({ error: "credential is required" }, 400);
-        if (!(await resolveUserByCredential(env, credential))) return json({ error: "invalid credential" }, 401);
+        const boundUserId = await resolveUserByCredential(env, credential);
+        if (!boundUserId) return json({ error: "invalid credential" }, 401);
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
+        const playerId = `openclaw:${boundUserId}`;
+
+        const resolvePlayerToken = async (): Promise<string> => {
+          const tokenRes = await stub.fetch("https://room/agent/player-token", {
+            method: "POST",
+            body: JSON.stringify({ playerId }),
+          });
+          if (!tokenRes.ok) return "";
+          const tokenData = await tokenRes.json<any>();
+          return String(tokenData?.playerToken || "");
+        };
+
+        let effectivePlayerToken = await resolvePlayerToken();
+        if (!effectivePlayerToken) {
+          const joinRes = await stub.fetch("https://room/join", {
+            method: "POST",
+            body: JSON.stringify({ playerId }),
+          });
+          if (joinRes.ok) {
+            const joinData = await joinRes.json<any>();
+            effectivePlayerToken = String(joinData?.playerToken || "");
+          }
+        }
+        if (!effectivePlayerToken) return json({ ok: true, next: "end_session", reason: "agent_not_in_room" });
 
         const waitMs = Math.max(0, Math.min(60000, Number(body.waitMs ?? 20000)));
         const startedAt = Date.now();
@@ -536,7 +557,7 @@ export default {
           if (closed) {
             const leaveRes = await stub.fetch("https://room/leave", {
               method: "POST",
-              body: JSON.stringify({ playerToken: body.playerToken }),
+              body: JSON.stringify({ playerToken: effectivePlayerToken }),
             });
             if (!leaveRes.ok) return passthrough(leaveRes);
             return json({ ok: true, next: "end_session", reason: "opponent_declined_rematch" });
@@ -573,12 +594,9 @@ export default {
           const status = String(state?.state?.status || "waiting");
           const nextTurn = String(state?.state?.nextTurn || "");
           const players = Array.isArray(state?.players) ? state.players : [];
-          const providedToken = String((body as any).playerToken || "");
 
           const agentPlayerId = `openclaw:${canonicalAgentId}`;
-          let me = providedToken
-            ? (players.find((p: any) => p?.token === providedToken) || players.find((p: any) => p?.id === agentPlayerId) || null)
-            : (players.find((p: any) => p?.id === agentPlayerId) || null);
+          let me = players.find((p: any) => p?.id === agentPlayerId) || null;
 
           let autoJoinedToken = "";
           if (!me) {
@@ -682,10 +700,6 @@ export default {
         if (!credential) return json({ error: "credential is required" }, 400);
         const boundUserId = await resolveUserByCredential(env, credential);
         if (!boundUserId) return json({ error: "invalid credential" }, 401);
-        const senderRaw = String(body.senderId || "").trim();
-        if (senderRaw && senderRaw !== boundUserId && senderRaw !== `openclaw:${boundUserId}`) {
-          return json({ error: "senderId does not match credential binding" }, 403);
-        }
 
         const actionId = String(body.actionId || "").trim();
         const dedupeKey = actionId ? `agent:act:${body.roomId}:${actionId}` : "";
@@ -700,10 +714,8 @@ export default {
         let moveResult: any = null;
         let chatResult: any = null;
 
+        const playerId = `openclaw:${boundUserId}`;
         const resolveTokenBySender = async (): Promise<string> => {
-          const sender = String(body.senderId || boundUserId).trim();
-          if (!sender) return "";
-          const playerId = sender.startsWith("openclaw:") ? sender : `openclaw:${sender}`;
           const tokenRes = await stub.fetch("https://room/agent/player-token", {
             method: "POST",
             body: JSON.stringify({ playerId }),
@@ -714,10 +726,7 @@ export default {
         };
 
         if (body.move !== undefined) {
-          let playerToken = String(body.playerToken || "").trim();
-          if (!playerToken) {
-            playerToken = await resolveTokenBySender();
-          }
+          let playerToken = await resolveTokenBySender();
           if (!playerToken) return json({ error: "playerToken is required when move is provided" }, 400);
 
           let moveRes = await stub.fetch("https://room/move", {
@@ -746,7 +755,7 @@ export default {
             method: "POST",
             body: JSON.stringify({
               senderType: "openclaw",
-              senderId: body.senderId || `openclaw:${boundUserId}`,
+              senderId: playerId,
               text: chatText,
             }),
           });
@@ -988,9 +997,14 @@ async function buildLobbyOverview(request: Request, env: Env, gameType: string) 
         const ownerProfile = ownerId ? await getProfileOrNull(env, ownerId) : null;
         const onlineUsers = Array.isArray(online?.users) ? online.users : [];
         const onlineOpenclaw = Array.isArray(online?.openclaw) ? online.openclaw : [];
+        const onlineSpectators = Array.isArray(online?.spectators) ? online.spectators : [];
         const participantIds = Array.from(
           new Set(
-            [...onlineUsers.map((item: any) => String(item?.id || "")), ...onlineOpenclaw.map((item: any) => String(item?.id || "").replace(/^openclaw:/, ""))]
+            [
+              ...onlineUsers.map((item: any) => String(item?.id || "")),
+              ...onlineOpenclaw.map((item: any) => String(item?.id || "").replace(/^openclaw:/, "")),
+              ...onlineSpectators.map((item: any) => String(item?.id || "")),
+            ]
               .filter(Boolean),
           ),
         );
@@ -1022,6 +1036,17 @@ async function buildLobbyOverview(request: Request, env: Env, gameType: string) 
               avatarUrl: String(profile?.clawAvatarUrl || profile?.avatarUrl || ""),
             };
           }),
+          ...onlineSpectators.map((item: any) => {
+            const userId = String(item?.id || "");
+            const profile = profileMap.get(userId) || null;
+            return {
+              id: `spectator:${userId}`,
+              type: "spectator",
+              seat: "",
+              displayName: normalizeProfileName(profile, userId),
+              avatarUrl: String(profile?.avatarUrl || ""),
+            };
+          }),
         ];
 
         return {
@@ -1032,7 +1057,7 @@ async function buildLobbyOverview(request: Request, env: Env, gameType: string) 
           ownerId,
           owner: summarizeProfile(ownerProfile, ownerId),
           onlineCount: onlinePlayers.length,
-          spectatorCount: Array.isArray(online?.spectators) ? online.spectators.length : 0,
+          spectatorCount: onlineSpectators.length,
           onlinePlayers,
         };
       }),

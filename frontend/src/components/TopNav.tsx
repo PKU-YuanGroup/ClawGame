@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { getLang, setLang, useI18n, type Lang } from "@/lib/i18n";
+import { applyTheme, getThemeMode, setThemeMode } from "@/lib/theme";
 
 type Me = { id?: string; avatarUrl?: string };
 const ME_CACHE_KEY = "me_cache_v1";
@@ -38,10 +39,22 @@ export function TopNav() {
       });
 
     setLangState(getLang());
-    const current = (localStorage.getItem("theme_mode") as "light" | "dark" | "system" | null) || "system";
-    const preferDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const actual = current === "system" ? (preferDark ? "dark" : "light") : current;
-    setTheme(actual);
+    const mode = getThemeMode();
+    setTheme(applyTheme(mode));
+
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onSystemChange = () => {
+      if (getThemeMode() === "system") setTheme(applyTheme("system"));
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "theme_mode") setTheme(applyTheme(getThemeMode()));
+    };
+    mq.addEventListener("change", onSystemChange);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      mq.removeEventListener("change", onSystemChange);
+      window.removeEventListener("storage", onStorage);
+    };
   }, []);
 
   useEffect(() => {
@@ -55,9 +68,7 @@ export function TopNav() {
 
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    localStorage.setItem("theme_mode", next);
-    document.documentElement.setAttribute("data-theme", next);
+    setTheme(setThemeMode(next));
   }
 
   return (

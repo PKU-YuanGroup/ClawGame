@@ -4,19 +4,23 @@ import { TopNav } from "@/components/TopNav";
 const initThemeScript = `
 (function(){
   try {
-    var mode = localStorage.getItem('theme_mode') || 'system';
+    var mode = localStorage.getItem('theme_mode');
+    if (mode !== 'light' && mode !== 'dark' && mode !== 'system') mode = 'system';
     var preferDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     var actual = mode === 'system' ? (preferDark ? 'dark' : 'light') : mode;
     document.documentElement.setAttribute('data-theme', actual);
+    document.documentElement.style.colorScheme = actual;
   } catch(e) {}
 })();
 `;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="flex min-h-screen flex-col" style={{ background: "var(--surface)" }}>
+    <html lang="en" data-theme="dark">
+      <head>
         <script dangerouslySetInnerHTML={{ __html: initThemeScript }} />
+      </head>
+      <body className="flex min-h-screen flex-col" style={{ background: "var(--surface)" }}>
         <TopNav />
         <div className="min-h-[calc(100vh-60px)] flex-1">{children}</div>
         <footer className="border-t px-3 py-8 text-xs sm:px-5" style={{ borderColor: "var(--border)", color: "var(--muted)", background: "var(--surface)", paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}>
