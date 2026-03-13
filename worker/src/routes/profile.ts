@@ -2,11 +2,12 @@ import type { Env } from "../types";
 import { json } from "../lib/http";
 import { getUserProfile, requireUser } from "../lib/user";
 import { ensureWelcomeBadgeForUser, getBadgeDefs } from "../lib/badges";
-import { storeGet, storePut } from "../lib/store";
+import { storeDelete, storeGet, storePut } from "../lib/store";
 import {
   getClawCredential,
   getOrCreateClawBindingToken,
   getOrCreateClawCredential,
+  revokeClawCredential,
   resolveUserByBindingToken,
   resolveUserByCredential,
 } from "../lib/claw-auth";
@@ -101,6 +102,24 @@ export async function handleProfileRoutes(request: Request, env: Env, url: URL):
       hasCredential: Boolean(credential),
       credential: credential || null,
     });
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/me/claw-unbind") {
+    const me = await requireUser(request, env);
+    const profile = await getUserProfile(env, me.userId);
+
+    profile.clawNickname = "";
+    profile.clawBio = "";
+    profile.clawOwnerReview = "";
+    profile.clawAvatarUrl = "";
+    profile.updatedAt = Date.now();
+
+    await storePut(env, `user:${me.userId}`, JSON.stringify(profile));
+    await storeDelete(env, `claw-avatar-bin:${me.userId}`);
+    await storeDelete(env, `claw-avatar-ct:${me.userId}`);
+    await revokeClawCredential(env, me.userId);
+
+    return json({ ok: true, profile });
   }
 
   if (request.method === "POST" && url.pathname === "/api/claw/avatar-upload") {

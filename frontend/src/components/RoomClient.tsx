@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, API_BASE } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { getGameLabel, getGameTheme } from "@/lib/game-library";
@@ -66,6 +66,11 @@ function isBotId(id?: string) {
   return Boolean(id && (id.startsWith("bot:") || id.startsWith("openclaw:bot:")));
 }
 
+function botUserIdOf(id?: string) {
+  const normalized = normalizeProfileId(id);
+  return normalized.startsWith("bot:") ? normalized : "";
+}
+
 const CHESS_GLYPHS: Record<string, string> = {
   black_king: "♚",
   black_queen: "♛",
@@ -107,6 +112,16 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const [chatUnreadMobile, setChatUnreadMobile] = useState(false);
   const [online, setOnline] = useState<OnlineData>({ users: [], openclaw: [], spectators: [] });
   const [text, setText] = useState("");
+  const [selectedFrom, setSelectedFrom] = useState("");
+  const [texasAction, setTexasAction] = useState("check");
+  const [texasAmount, setTexasAmount] = useState("20");
+  const [werewolfAction, setWerewolfAction] = useState("vote");
+  const [werewolfTarget, setWerewolfTarget] = useState("");
+  const [undercoverAction, setUndercoverAction] = useState("clue");
+  const [undercoverText, setUndercoverText] = useState("");
+  const [undercoverTarget, setUndercoverTarget] = useState("");
+  const [guandanAction, setGuandanAction] = useState("pass");
+  const [guandanCards, setGuandanCards] = useState("");
   const [profiles, setProfiles] = useState<Record<string, UserProfile>>({});
   const [snapshot, setSnapshot] = useState<any>(null);
   const [ws, setWs] = useState<WebSocket | null>(null);
@@ -114,9 +129,9 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
   const [wsLatencyMs, setWsLatencyMs] = useState<number | null>(null);
   const [wsPacketLossPct, setWsPacketLossPct] = useState(0);
-  const [joinRequested, setJoinRequested] = useState(false);
   const [playerToken, setPlayerToken] = useState("");
   const [joining, setJoining] = useState(false);
+  const [openclawJoining, setOpenclawJoining] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [botJoining, setBotJoining] = useState(false);
   const [botRemoving, setBotRemoving] = useState(false);
@@ -131,19 +146,11 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const [followingIds, setFollowingIds] = useState<string[]>([]);
   const [followSubmittingId, setFollowSubmittingId] = useState("");
   const [profileCard, setProfileCard] = useState<{ id: string; type: "user" | "openclaw" } | null>(null);
+  const [openclawBindModalOpen, setOpenclawBindModalOpen] = useState(false);
   const [profileFollowersCount, setProfileFollowersCount] = useState(0);
   const [rematchSubmitting, setRematchSubmitting] = useState(false);
   const [roomResetting, setRoomResetting] = useState(false);
   const [roomLeaving, setRoomLeaving] = useState(false);
-  const [promptCopied, setPromptCopied] = useState(false);
-  const [showBindGuard, setShowBindGuard] = useState(false);
-  const myOpenclawId = me?.id ? `openclaw:${me.id}` : "";
-  const myOpenclawJoined = Boolean(myOpenclawId)
-    && Array.isArray(snapshot?.players)
-    && snapshot.players.some((p: any) => p?.id === myOpenclawId);
-  const hasBoundOpenClaw = Boolean(
-    me?.id && String(me?.clawBio || "").trim() && String(me?.clawOwnerReview || "").trim(),
-  );
   const reconnectTimerRef = useRef<number | null>(null);
   const retryRef = useRef(0);
   const pingTimerRef = useRef<number | null>(null);
@@ -260,6 +267,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
           setWsReady(false);
           setWsLatencyMs(null);
           setJoining(false);
+          setOpenclawJoining(false);
           setBotJoining(false);
           setBotRemoving(false);
           removeBotLockRef.current = false;
@@ -285,6 +293,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
         w.onerror = () => {
           setWsReady(false);
           setJoining(false);
+          setOpenclawJoining(false);
           setBotJoining(false);
           setBotRemoving(false);
           removeBotLockRef.current = false;
@@ -326,6 +335,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
           }
           if (eventType === "error") {
             setJoining(false);
+            setOpenclawJoining(false);
             setBotJoining(false);
             setBotRemoving(false);
             removeBotLockRef.current = false;
@@ -344,22 +354,24 @@ export function RoomClient({ roomId }: { roomId: string }) {
           }
           if (eventType === "action_result") {
             const payload = (m.payload || {}) as any;
+            if (payload?.ok === false && payload?.error && !payload?.kind) {
+              pushToast(String(payload.error), "error");
+            }
             if (payload.kind === "join_game") {
               setJoining(false);
+              setOpenclawJoining(false);
               if (joinGameTimerRef.current) {
                 window.clearTimeout(joinGameTimerRef.current);
                 joinGameTimerRef.current = null;
               }
               if (payload.ok && payload.playerToken) {
                 setPlayerToken(String(payload.playerToken));
-                setJoinRequested(true);
               }
             }
             if (payload.kind === "leave_game") {
               setLeaving(false);
               if (payload.ok) {
                 setPlayerToken("");
-                setJoinRequested(false);
                 setText("");
               }
             }
@@ -489,10 +501,6 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
   async function joinGame() {
     if (!me?.id || !roomId || joining) return;
-    if (!hasBoundOpenClaw) {
-      setShowBindGuard(true);
-      return;
-    }
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       pushToast(t("room.toastWsNotConnected"), "error");
       return;
@@ -501,11 +509,97 @@ export function RoomClient({ roomId }: { roomId: string }) {
     if (joinGameTimerRef.current) window.clearTimeout(joinGameTimerRef.current);
     joinGameTimerRef.current = window.setTimeout(() => {
       setJoining(false);
+      setOpenclawJoining(false);
       joinGameTimerRef.current = null;
       pushToast("Join timeout, please try again.", "error");
       void refreshRoomPresence();
     }, 8000);
     ws.send(JSON.stringify({ type: "join_game", payload: { playerId: me.id } }));
+  }
+
+  async function joinOpenclawGame() {
+    if (!me?.id || !roomId || openclawJoining) return;
+    setOpenclawJoining(true);
+    try {
+      const bindState = await api<{ hasCredential?: boolean }>("/api/me/claw-token", { method: "POST" });
+      if (!bindState?.hasCredential) {
+        const message = t("room.toastOpenclawBindRequired");
+        pushToast(message, "error");
+        setOpenclawBindModalOpen(true);
+        return;
+      }
+      const data = await api<any>("/api/match/join-openclaw", {
+        method: "POST",
+        body: JSON.stringify({ roomId }),
+      });
+      void refreshRoomPresence();
+    } catch (err) {
+      const message = (err as Error).message || t("room.toastJoinGameFailed");
+      if (message.includes("openclaw is not bound")) {
+        const bindMessage = t("room.toastOpenclawBindRequired");
+        pushToast(bindMessage, "error");
+        setOpenclawBindModalOpen(true);
+      } else {
+        pushToast(message, "error");
+      }
+    } finally {
+      setOpenclawJoining(false);
+    }
+  }
+
+  function sendMove(move: Record<string, unknown>) {
+    if (!joinedAsPlayer) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      pushToast(t("room.toastWsNotConnected"), "error");
+      return;
+    }
+    ws.send(JSON.stringify({ type: "submit_action", payload: { move } }));
+  }
+
+  function submitTexasAction() {
+    const action = String(texasAction || "check");
+    const amount = Number(texasAmount || 0);
+    if (action === "raise") {
+      sendMove({ action, amount });
+      return;
+    }
+    sendMove({ action });
+  }
+
+  function submitWerewolfAction() {
+    const action = String(werewolfAction || "vote");
+    if (action === "ready") {
+      sendMove({ action });
+      return;
+    }
+    if (!werewolfTarget) return;
+    sendMove({ action, target: werewolfTarget });
+  }
+
+  function submitUndercoverAction() {
+    const action = String(undercoverAction || "clue");
+    if (action === "clue") {
+      const text = String(undercoverText || "").trim();
+      if (!text) return;
+      sendMove({ action, text });
+      return;
+    }
+    if (!undercoverTarget) return;
+    sendMove({ action, target: undercoverTarget });
+  }
+
+  function submitGuandanAction() {
+    const action = String(guandanAction || "pass");
+    if (action === "pass") {
+      sendMove({ action });
+      return;
+    }
+    const cards = String(guandanCards || "")
+      .split(/[\s,]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    if (!cards.length) return;
+    sendMove({ action, cards });
   }
 
   async function submitRematch(accept: boolean) {
@@ -526,9 +620,24 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
   async function leaveGame() {
     if (leaving) return;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
     setLeaving(true);
-    ws.send(JSON.stringify({ type: "leave_game" }));
+    try {
+      if (roomId && playerToken) {
+        await api("/api/match/leave", {
+          method: "POST",
+          body: JSON.stringify({ roomId, playerToken }),
+        });
+        setPlayerToken("");
+        await refreshRoomPresence();
+        return;
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "leave_game" }));
+      }
+    } catch (err) {
+      setLeaving(false);
+      pushToast((err as Error).message || t("room.toastLeaveRoomFailed"), "error");
+    }
   }
 
   async function resetRoom() {
@@ -556,7 +665,6 @@ export function RoomClient({ roomId }: { roomId: string }) {
         body: JSON.stringify({ roomId }),
       });
       setPlayerToken("");
-      setJoinRequested(false);
       setText("");
       pushToast(t("room.toastLeaveRoomSuccess"), "info");
     } catch (err) {
@@ -670,60 +778,6 @@ export function RoomClient({ roomId }: { roomId: string }) {
     setText("");
   }
 
-  const openclawPrompt = useMemo(() => {
-    if (!roomId) return "";
-    // For CLI connectivity, prefer the page origin so copied prompt matches the active deployment.
-    const base = typeof window !== "undefined" ? window.location.origin : (API_BASE || "");
-    const suggestedAgentId = String(me?.id || "your-openclaw-agent-id");
-
-    if (lang === "en") {
-      return [
-        "Quick Start (clawgame-cli)",
-        `BASE_URL=${base}`,
-        `ROOM_ID=${roomId}`,
-        `AGENT_ID=${suggestedAgentId}`,
-        "",
-        "1) login (wait until match starts)",
-        'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" login --wait-ms 0',
-        "",
-        "2) poll loop",
-        'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" poll --wait-ms 25000',
-        "",
-        "3) on yourturn -> act once",
-        'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" act --move-json ...',
-        "",
-        "4) on gameover -> exit",
-        'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" exit --wait-ms 20000',
-      ].join("\n");
-    }
-
-    return [
-      "快速开始（clawgame-cli）",
-      `BASE_URL=${base}`,
-      `ROOM_ID=${roomId}`,
-      `AGENT_ID=${suggestedAgentId}`,
-      "",
-      "1）登录并等待开局",
-      'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" login --wait-ms 0',
-      "",
-      "2）进入 poll 循环",
-      'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" poll --wait-ms 25000',
-      "",
-      "3）收到 yourturn 后执行一步 act",
-      'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" act --move-json ...',
-      "",
-      "4）收到 gameover 后执行 exit",
-      'clawgame-cli --base-url "$BASE_URL" --room-id "$ROOM_ID" --agent-id "$AGENT_ID" exit --wait-ms 20000',
-    ].join("\n");
-  }, [lang, roomId, me?.id]);
-
-  async function copyOpenclawPrompt() {
-    if (!openclawPrompt) return;
-    await navigator.clipboard.writeText(openclawPrompt);
-    setPromptCopied(true);
-    window.setTimeout(() => setPromptCopied(false), 1500);
-  }
-
   function profileByAnyId(id?: string) {
     const profileId = normalizeProfileId(id);
     return profiles[id || ""] || profiles[profileId] || null;
@@ -752,43 +806,68 @@ export function RoomClient({ roomId }: { roomId: string }) {
   }
 
   const allOnlineCount = online.users.length + online.openclaw.length + online.spectators.length;
-  const joinedAsPlayer = Boolean(playerToken) && myOpenclawJoined;
+  const myUserId = String(me?.id || "");
+  const myOpenclawId = myUserId ? `openclaw:${myUserId}` : "";
+  const joinedAsPlayer = Boolean(myUserId)
+    && Boolean(playerToken)
+    && Array.isArray(snapshot?.players)
+    && snapshot.players.some((p: any) => String(p?.id || "") === myUserId);
+  const canLeaveGameSeat = Boolean(playerToken);
+  const myOpenclawJoined = Boolean(myOpenclawId)
+    && Array.isArray(snapshot?.players)
+    && snapshot.players.some((p: any) => String(p?.id || "") === myOpenclawId);
   const gameState = snapshot?.state || {};
   const ownerId = String(snapshot?.ownerId || "");
   const isOwner = Boolean(me?.id)
     && (ownerId === me?.id || normalizeProfileId(ownerId) === normalizeProfileId(me?.id));
   const canChat = joinedAsPlayer || isOwner;
-  const openclawParticipantIds = new Set<string>(
+  const allPlayerEntries: Array<{ id: string }> = Array.from<string>(new Set(
     (Array.isArray(snapshot?.players) ? snapshot.players : [])
       .map((p: any) => String(p?.id || ""))
-      .filter((id: string) => id.startsWith("openclaw:"))
-      .map((id: string) => id.slice("openclaw:".length)),
-  );
-  const realPlayers: Array<{ id: string }> = Array.from<string>(new Set(
-    (Array.isArray(snapshot?.players) ? snapshot.players : [])
-      .map((p: any) => String(p?.id || ""))
-      .filter((id: string) => Boolean(id)
-        && !id.startsWith("openclaw:")
-        && !id.startsWith("bot:")
-        && !id.startsWith("guest")
-        && openclawParticipantIds.has(id)),
+      .filter((id: string) => Boolean(id) && !botUserIdOf(id) && !id.startsWith("guest")),
   )).map((id: string) => ({ id }));
-  const botPlayers: Array<{ id: string }> = Array.from<string>(new Set(
+  const botPlayers: Array<{ id: string; botId: string }> = Array.from<string>(new Set(
     (Array.isArray(snapshot?.players) ? snapshot.players : [])
-      .map((p: any) => String(p?.id || ""))
-      .filter((id: string) => Boolean(id) && id.startsWith("bot:")),
-  )).map((id: string) => ({ id }));
+      .map((p: any) => botUserIdOf(String(p?.id || "")))
+      .filter(Boolean),
+  )).map((botId: string) => ({ id: `openclaw:${botId}`, botId }));
   const gameType = snapshot?.gameType || gameState?.gameType || "gomoku";
   const gameLabel = getGameLabel(gameType, lang);
   const gameTheme = getGameTheme(gameType);
-  const supportsBot = ["gomoku", "go", "xiangqi", "chess", "texas_holdem", "werewolf", "junqi", "who_is_undercover"].includes(gameType);
+  const supportsBot = ["gomoku", "go", "xiangqi", "chess", "texas_holdem", "werewolf", "junqi", "who_is_undercover", "guandan"].includes(gameType);
   const boardSize = Number(gameState?.size || gameState?.boardSize || (Array.isArray(gameState?.board) ? gameState.board.length : 15));
   const board = Array.isArray(gameState?.board) ? gameState.board : [];
   const boardHeight = Number(gameState?.height || board.length || boardSize);
   const boardWidth = Number(gameState?.width || board[0]?.length || boardSize);
   const statusText = gameState?.status || "waiting";
   const isGameFinished = statusText === "finished" || Boolean((gameState as any)?.winner) || Boolean(gameOverWinner);
+  const autoResetAt = Number((gameState as any)?.autoResetAt || (snapshot as any)?.autoResetAt || 0);
+  const isDefaultAutoResetRoom = autoResetAt > 0;
+  const autoResetRemainingSec = isDefaultAutoResetRoom ? Math.max(0, Math.ceil((autoResetAt - nowTs) / 1000)) : 0;
   const turnText = gameState?.nextTurn || "-";
+  const guandanBoard = ((gameState as any)?.board || {}) as any;
+  const guandanHandCounts = (guandanBoard?.handCounts || {}) as Record<string, number>;
+  const guandanLastPlay = guandanBoard?.lastPlay as { seat?: string; cards?: string[]; combo?: { type?: string; rank?: number; length?: number } } | undefined;
+  const guandanFinished = Array.isArray(guandanBoard?.finishedOrder) ? guandanBoard.finishedOrder as string[] : [];
+  const canSubmitMove = joinedAsPlayer && wsReady && statusText === "playing" && !isGameFinished;
+  const werewolfAliveSeats = Array.isArray((gameState as any)?.board?.alive) ? ((gameState as any).board.alive as string[]) : [];
+  const undercoverAliveSeats = Array.isArray((gameState as any)?.board?.alive) ? ((gameState as any).board.alive as string[]) : [];
+  const mySeat = String(
+    (Array.isArray(snapshot?.players) ? snapshot.players : []).find((p: any) => String(p?.id || "") === myUserId)?.seat || "",
+  );
+  const isMyTurn = Boolean(mySeat) && turnText === mySeat;
+  const canActNow = canSubmitMove && isMyTurn;
+  const moveDisabledReason = !joinedAsPlayer
+    ? t("room.needJoinToAct")
+    : !wsReady
+      ? t("room.needConnectionToAct")
+      : statusText !== "playing" || isGameFinished
+        ? t("room.waitGameStartToAct")
+        : !mySeat
+          ? t("room.waitSeatToAct")
+          : !isMyTurn
+            ? t("room.waitYourTurn")
+            : "";
   const openclawBySeat = Array.isArray(snapshot?.players)
     ? snapshot.players.reduce((acc: Record<string, string>, player: any) => {
       if (player?.seat && player?.id?.startsWith("openclaw:") && !acc[player.seat]) {
@@ -825,13 +904,19 @@ export function RoomClient({ roomId }: { roomId: string }) {
     remainText: formatMs(seatRemainMs(seat)),
   }));
   const winnerSeat = String((gameState as any)?.winner || gameOverWinner || "");
+  const settlementPlayers = Array.isArray((gameState as any)?.settlementPlayers)
+    ? ((gameState as any).settlementPlayers as Array<{ id?: string; seat?: string }>)
+    : [];
+  const resultPlayers = (Array.isArray(snapshot?.players) && snapshot.players.length > 0)
+    ? snapshot.players
+    : settlementPlayers;
   const winnerIds = winnerSeat === "draw" || !winnerSeat
     ? []
-    : (Array.isArray(snapshot?.players) ? snapshot.players : [])
+    : resultPlayers
       .filter((p: any) => String(p?.seat || "") === winnerSeat)
       .map((p: any) => String(p?.id || ""))
       .filter(Boolean);
-  const allPlayerIds = (Array.isArray(snapshot?.players) ? snapshot.players : [])
+  const allPlayerIds = resultPlayers
     .map((p: any) => String(p?.id || ""))
     .filter((id: string) => Boolean(id));
   const loserIds = winnerSeat === "draw"
@@ -845,6 +930,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
     return normalized && normalizedOwner && normalized === normalizedOwner;
   };
   const profileCardNormalizedId = profileCard ? normalizeProfileId(profileCard.id) : "";
+  const profileCardBotId = profileCard ? botUserIdOf(profileCard.id) : "";
   const profileCardProfile = profileCard ? profileByAnyId(profileCard.id) : null;
   const profileCardBadges = Array.isArray((profileCardProfile as any)?.badgeDetails) ? (profileCardProfile as any).badgeDetails : [];
   const profileCardOwnerId = profileCard?.type === "openclaw" ? normalizeProfileId(profileCard.id) : "";
@@ -855,7 +941,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
       && isBotId(profileCard.id)
       && me?.id
       && statusText === "waiting"
-      && (isOwner || profileCard.id.startsWith(`bot:${me.id}:`)),
+      && (isOwner || profileCardBotId.startsWith(`bot:${me.id}:`)),
   );
   const syncFields = [
     { key: "game", label: "Game", value: gameLabel },
@@ -866,15 +952,19 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const isDuelHud = genericSeatList.length <= 2 && genericSeatList.every((seat) => seat === "black" || seat === "white");
 
   useEffect(() => {
-    if (statusText !== "playing") return;
+    if (statusText !== "playing" && !(isGameFinished && isDefaultAutoResetRoom)) return;
     const timer = window.setInterval(() => setNowTs(Date.now()), 250);
     return () => window.clearInterval(timer);
-  }, [statusText]);
+  }, [statusText, isGameFinished, isDefaultAutoResetRoom]);
 
   useEffect(() => {
     if (statusText === "finished" || (gameState as any)?.winner) return;
     if (gameOverWinner) setGameOverWinner("");
   }, [statusText, (gameState as any)?.winner, gameOverWinner]);
+
+  useEffect(() => {
+    setSelectedFrom("");
+  }, [gameType]);
   const isReconnecting = !wsReady && hasConnectedOnce;
   const lowSignal = wsReady && (wsPacketLossPct > 0 || (wsLatencyMs ?? 0) >= 400);
   const wsStatusText = !wsReady
@@ -919,7 +1009,8 @@ export function RoomClient({ roomId }: { roomId: string }) {
   }
 
   function renderPlayerRail() {
-    const players = Array.isArray(snapshot?.players) ? snapshot.players : [];
+    const players = (Array.isArray(snapshot?.players) ? snapshot.players : [])
+      .filter((player: any) => !String(player?.id || "").startsWith("bot:"));
     return (
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {players.map((player: any, index: number) => {
@@ -955,20 +1046,20 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
   if (!meChecked) {
     return (
-      <main className="grid min-h-[calc(100vh-60px)] grid-cols-1 lg:grid-cols-[320px_1fr_280px]" />
+      <main className="grid min-h-[calc(100vh-60px)] grid-cols-1 lg:h-[calc(100vh-60px)] lg:grid-cols-[320px_1fr_280px] lg:overflow-hidden" />
     );
   }
 
 
   return (
-    <main className="relative grid min-h-[calc(100vh-60px)] grid-cols-1 lg:grid-cols-[320px_1fr_280px]">
-      <aside className={`${chatOpenMobile ? "fixed inset-0 z-30 flex bg-black/50 p-3" : "hidden"} lg:static lg:z-auto lg:flex lg:h-[calc(100vh-60px)] lg:bg-transparent lg:p-3 lg:border-r lg:border-b-0`} style={{ borderColor: "var(--border)" }}>
+    <main className="relative grid min-h-[calc(100vh-60px)] grid-cols-1 lg:h-[calc(100vh-60px)] lg:grid-cols-[320px_1fr_280px] lg:overflow-hidden">
+      <aside className={`${chatOpenMobile ? "fixed inset-0 z-30 flex bg-black/50 p-3" : "hidden"} lg:static lg:z-auto lg:flex lg:h-[calc(100vh-60px)] lg:overflow-hidden lg:bg-transparent lg:p-3 lg:border-r lg:border-b-0`} style={{ borderColor: "var(--border)" }}>
         <div className="flex h-full w-full flex-col rounded-xl border border-slate-800 bg-[var(--surface)] p-3 lg:h-auto lg:w-auto lg:rounded-none lg:border-0 lg:bg-transparent lg:p-0">
           <div className="mb-2 flex items-center justify-between">
             <b>Room Chat</b>
             <button className="rounded border border-slate-700 px-2 py-1 text-xs lg:hidden" onClick={() => setChatOpenMobile(false)}>Close</button>
           </div>
-        <div className="mt-2 h-64 flex-1 space-y-2 overflow-auto lg:h-auto">
+        <div className="mt-2 h-64 min-h-0 flex-1 space-y-2 overflow-auto">
           {chat.map((m, i) => (
             <div key={m.id || i} className="rounded-lg border px-3 py-2 text-sm" style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 86%, transparent)" }}>
               <div className="mb-1 flex items-center gap-2">
@@ -1015,34 +1106,21 @@ export function RoomClient({ roomId }: { roomId: string }) {
         </button>
       ) : null}
 
-      <section className="flex flex-col p-3">
+      <section className="flex min-h-0 flex-col overflow-y-auto p-3">
         <div className="mb-3 lg:hidden">
           <div className="flex gap-2 overflow-x-auto pb-1">
-            {realPlayers.length + botPlayers.length > 0 ? (
+            {allPlayerEntries.length + botPlayers.length > 0 ? (
               <div className="w-max max-w-[55vw] shrink-0 p-1">
                 <div className="mb-1 text-[11px] text-slate-400">{t("room.players")}</div>
                 <div className="flex gap-2 overflow-x-auto pb-1">
-                  {realPlayers.map((u) => (
-                    <button key={`m_player_${u.id}`} className="shrink-0" onClick={() => openProfileCard(u.id, "user")} title={displayNameById(u.id)}>
-                      <img src={avatarById(u.id)} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-9 w-9 rounded-full border border-slate-700 object-cover" alt="avatar" />
+                  {allPlayerEntries.map((u) => (
+                    <button key={`m_player_${u.id}`} className="shrink-0" onClick={() => openProfileCard(u.id, u.id.startsWith("openclaw:") ? "openclaw" : "user")} title={displayNameById(u.id, u.id.startsWith("openclaw:") ? "openclaw" : "user")}>
+                      <img src={avatarById(u.id, u.id.startsWith("openclaw:") ? "openclaw" : "user")} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-9 w-9 rounded-full border border-slate-700 object-cover" alt="avatar" />
                     </button>
                   ))}
                   {botPlayers.map((u) => (
-                    <button key={`m_bot_${u.id}`} className="shrink-0" onClick={() => openProfileCard(u.id, "user")} title={displayNameById(u.id)}>
-                      <img src={avatarById(u.id)} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-9 w-9 rounded-full border border-slate-700 object-cover" alt="bot" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            {(online.openclaw?.length || 0) > 0 ? (
-              <div className="w-max max-w-[55vw] shrink-0 p-1">
-                <div className="mb-1 text-[11px] text-slate-400">{t("room.openclaw")}</div>
-                <div className="flex gap-2 overflow-x-auto pb-1">
-                  {online.openclaw?.map((u) => (
-                    <button key={`m_openclaw_${u.id}`} className="shrink-0" onClick={() => openProfileCard(u.id, "openclaw")} title={displayNameById(u.id, "openclaw")}>
-                      <img src={avatarById(u.id, "openclaw")} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-9 w-9 rounded-full border border-slate-700 object-cover" alt="openclaw" />
+                    <button key={`m_bot_${u.botId}`} className="shrink-0" onClick={() => openProfileCard(u.id, "openclaw")} title={displayNameById(u.id, "openclaw")}>
+                      <img src={avatarById(u.id, "openclaw")} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-9 w-9 rounded-full border border-slate-700 object-cover" alt="bot" />
                     </button>
                   ))}
                 </div>
@@ -1067,58 +1145,22 @@ export function RoomClient({ roomId }: { roomId: string }) {
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-3 py-2" style={{ borderColor: "var(--border)", background: "var(--surface)", boxShadow: "0 4px 10px rgba(2, 6, 23, 0.08)" }}>
           <div className="text-xs" style={{ color: "var(--fg)" }}>{t("room.roomId")}: {roomId} · {gameLabel} · {statusText}</div>
           <div className="flex items-center gap-2">
-            <div className="group relative">
-              <button
-                className="inline-flex h-8 w-8 items-center justify-center rounded text-white disabled:opacity-50"
-                style={{ background: "var(--accent)" }}
-                onClick={joinGame}
-                disabled={!me?.id || joining || joinRequested}
-                aria-label={joinedAsPlayer ? t("room.joined") : joining ? t("room.joining") : joinRequested ? t("room.waitingOpenclaw") : t("room.joinGame")}
-                title={joinedAsPlayer ? t("room.joined") : joining ? t("room.joining") : joinRequested ? t("room.waitingOpenclaw") : t("room.joinGame")}
-              >
-              {joining ? (
-                <svg viewBox="0 0 24 24" className="h-4 w-4 animate-spin" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" opacity="0.35" />
-                  <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              ) : joinedAsPlayer || joinRequested ? (
-                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              )}
-              </button>
-              <div className="pointer-events-none absolute -top-8 left-1/2 z-20 -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-1 text-[10px] opacity-0 shadow transition group-hover:opacity-100" style={{ background: "color-mix(in oklab, var(--surface) 96%, transparent)", color: "var(--fg)", border: "1px solid var(--border)" }}>
-                {joinedAsPlayer ? t("room.joined") : joining ? t("room.joining") : joinRequested ? t("room.waitingOpenclaw") : t("room.joinGame")}
-              </div>
-            </div>
-            {joinRequested && !myOpenclawJoined ? (
-              <div className="group relative">
-                <button
-                  className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)]"
-                  style={{ color: "var(--fg)" }}
-                  onClick={copyOpenclawPrompt}
-                  aria-label={t("room.copyOpenclawPrompt")}
-                  title={t("room.copyOpenclawPrompt")}
-                >
-                  {promptCopied ? (
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  ) : (
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                      <path d="M7 10c-1.7 0-3 1.3-3 3s1.3 3 3 3c.7 0 1.3-.2 1.8-.6M17 10c1.7 0 3 1.3 3 3s-1.3 3-3 3c-.7 0-1.3-.2-1.8-.6M9 9c0-1.1.9-2 2-2h2c1.1 0 2 .9 2 2v6a3 3 0 0 1-3 3h0a3 3 0 0 1-3-3V9ZM10 5h4M8.5 12h1M14.5 12h1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  )}
-                </button>
-                <div className="pointer-events-none absolute -top-8 left-1/2 z-20 -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-1 text-[10px] opacity-0 shadow transition group-hover:opacity-100" style={{ background: "color-mix(in oklab, var(--surface) 96%, transparent)", color: "var(--fg)", border: "1px solid var(--border)" }}>
-                  {promptCopied ? t("room.copied") : t("room.copyOpenclawPrompt")}
-                </div>
-              </div>
-            ) : null}
+            <button
+              className="inline-flex h-8 items-center justify-center rounded px-2 text-xs font-semibold text-white disabled:opacity-50"
+              style={{ background: "var(--accent)" }}
+              onClick={joinGame}
+              disabled={!me?.id || joining || joinedAsPlayer}
+            >
+              {joinedAsPlayer ? t("room.joined") : joining ? t("room.joining") : t("room.joinAsPlayer")}
+            </button>
+            <button
+              className="inline-flex h-8 items-center justify-center rounded border px-2 text-xs font-semibold disabled:opacity-50"
+              style={{ borderColor: "var(--border)", color: "var(--fg)" }}
+              onClick={joinOpenclawGame}
+              disabled={!me?.id || openclawJoining || myOpenclawJoined}
+            >
+              {myOpenclawJoined ? t("room.openclawJoined") : openclawJoining ? t("room.joining") : t("room.joinAsOpenclaw")}
+            </button>
             {supportsBot ? (
             <>
               <div className="group relative">
@@ -1142,44 +1184,188 @@ export function RoomClient({ roomId }: { roomId: string }) {
                   </svg>
                 )}
                 </button>
-                <div className="pointer-events-none absolute -top-8 left-1/2 z-20 -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-1 text-[10px] opacity-0 shadow transition group-hover:opacity-100" style={{ background: "color-mix(in oklab, var(--surface) 96%, transparent)", color: "var(--fg)", border: "1px solid var(--border)" }}>
+                <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-1 -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-1 text-[10px] opacity-0 shadow transition group-hover:opacity-100" style={{ background: "color-mix(in oklab, var(--surface) 96%, transparent)", color: "var(--fg)", border: "1px solid var(--border)" }}>
                   {botJoining ? t("room.addingBot") : t("room.addBot")}
                 </div>
               </div>
 
             </>
             ) : null}
-            {joinRequested ? (
-              <div className="group relative">
-                <button
-                  className="inline-flex h-8 w-8 items-center justify-center rounded border border-[var(--border)] text-xs font-semibold disabled:opacity-50"
-                  style={{ color: "var(--fg)" }}
-                  onClick={leaveGame}
-                  disabled={leaving}
-                  aria-label={leaving ? t("room.leaving") : t("room.leaveGame")}
-                  title={leaving ? t("room.leaving") : t("room.leaveGame")}
-                >
-                {leaving ? (
-                  <svg viewBox="0 0 24 24" className="h-4 w-4 animate-spin" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" opacity="0.35" />
-                    <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M19 12H9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    <path d="M15 8l4 4-4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                    <path d="M5 5v14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                )}
-                </button>
-                <div className="pointer-events-none absolute -top-8 left-1/2 z-20 -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-1 text-[10px] opacity-0 shadow transition group-hover:opacity-100" style={{ background: "color-mix(in oklab, var(--surface) 96%, transparent)", color: "var(--fg)", border: "1px solid var(--border)" }}>
-                  {leaving ? t("room.leaving") : t("room.leaveGame")}
-                </div>
-              </div>
+            {canLeaveGameSeat ? (
+              <button
+                className="inline-flex h-8 items-center justify-center rounded border px-2 text-xs font-semibold disabled:opacity-50"
+                style={{ borderColor: "var(--border)", color: "var(--fg)" }}
+                onClick={leaveGame}
+                disabled={leaving}
+              >
+                {leaving ? t("room.leaving") : t("room.leaveGame")}
+              </button>
             ) : null}
-            <span className="text-xs text-slate-400">{me?.id ? (joinedAsPlayer ? "" : joinRequested ? t("room.waitingOpenclawToJoin") : "") : t("room.loginToJoin")}</span>
+            <span className="text-xs text-slate-400">{me?.id ? (joinedAsPlayer ? "" : "") : t("room.loginToJoin")}</span>
           </div>
         </div>
+        {joinedAsPlayer ? (
+          <div className="mb-3 rounded-2xl border p-3" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
+            <div className="mb-2 text-xs font-semibold" style={{ color: "var(--fg)" }}>{t("room.playerActionTitle")}</div>
+            <div className="mb-2 text-[11px]" style={{ color: canActNow ? "#10b981" : "var(--muted)" }}>
+              {canActNow ? t("room.youCanActNow") : moveDisabledReason}
+            </div>
+            {gameType === "go" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  className="rounded border px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+                  style={{ borderColor: "var(--border)", color: "var(--fg)" }}
+                  onClick={() => sendMove({ pass: true })}
+                  disabled={!canActNow}
+                >
+                  {t("room.pass")}
+                </button>
+                <span className="text-[11px]" style={{ color: "var(--muted)" }}>{t("room.clickBoardToMove")}</span>
+              </div>
+            ) : gameType === "chess" || gameType === "xiangqi" || gameType === "junqi" ? (
+              <div className="text-[11px]" style={{ color: "var(--muted)" }}>
+                {selectedFrom ? `${t("room.from")}: ${selectedFrom} · ${t("room.clickTarget")}` : t("room.selectSourceThenTarget")}
+              </div>
+            ) : gameType === "texas_holdem" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={texasAction}
+                  onChange={(e) => setTexasAction(e.target.value)}
+                  className="rounded border px-2 py-1.5 text-xs"
+                  style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 88%, transparent)", color: "var(--fg)" }}
+                >
+                  {["fold", "check", "call", "raise"].map((x) => (
+                    <option key={x} value={x}>{x}</option>
+                  ))}
+                </select>
+                {texasAction === "raise" ? (
+                  <input
+                    value={texasAmount}
+                    onChange={(e) => setTexasAmount(e.target.value)}
+                    className="w-28 rounded border px-2 py-1.5 text-xs"
+                    style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 88%, transparent)", color: "var(--fg)" }}
+                    placeholder="20"
+                  />
+                ) : null}
+                <button
+                  className="rounded px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  style={{ background: "var(--accent)" }}
+                  onClick={submitTexasAction}
+                  disabled={!canActNow}
+                >
+                  {t("room.submitAction")}
+                </button>
+              </div>
+            ) : gameType === "werewolf" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={werewolfAction}
+                  onChange={(e) => setWerewolfAction(e.target.value)}
+                  className="rounded border px-2 py-1.5 text-xs"
+                  style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 88%, transparent)", color: "var(--fg)" }}
+                >
+                  {["vote", "night_kill", "inspect", "save", "ready"].map((x) => (
+                    <option key={x} value={x}>{x}</option>
+                  ))}
+                </select>
+                {werewolfAction !== "ready" ? (
+                  <select
+                    value={werewolfTarget}
+                    onChange={(e) => setWerewolfTarget(e.target.value)}
+                    className="rounded border px-2 py-1.5 text-xs"
+                    style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 88%, transparent)", color: "var(--fg)" }}
+                  >
+                    <option value="">{t("room.selectTarget")}</option>
+                    {werewolfAliveSeats.map((seat) => (
+                      <option key={seat} value={seat}>{seat}</option>
+                    ))}
+                  </select>
+                ) : null}
+                <button
+                  className="rounded px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  style={{ background: "var(--accent)" }}
+                  onClick={submitWerewolfAction}
+                  disabled={!canActNow || (werewolfAction !== "ready" && !werewolfTarget)}
+                >
+                  {t("room.submitAction")}
+                </button>
+              </div>
+            ) : gameType === "who_is_undercover" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={undercoverAction}
+                  onChange={(e) => setUndercoverAction(e.target.value)}
+                  className="rounded border px-2 py-1.5 text-xs"
+                  style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 88%, transparent)", color: "var(--fg)" }}
+                >
+                  {["clue", "vote"].map((x) => (
+                    <option key={x} value={x}>{x}</option>
+                  ))}
+                </select>
+                {undercoverAction === "clue" ? (
+                  <input
+                    value={undercoverText}
+                    onChange={(e) => setUndercoverText(e.target.value)}
+                    className="min-w-[220px] flex-1 rounded border px-2 py-1.5 text-xs"
+                    style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 88%, transparent)", color: "var(--fg)" }}
+                    placeholder={t("room.enterClue")}
+                  />
+                ) : (
+                  <select
+                    value={undercoverTarget}
+                    onChange={(e) => setUndercoverTarget(e.target.value)}
+                    className="rounded border px-2 py-1.5 text-xs"
+                    style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 88%, transparent)", color: "var(--fg)" }}
+                  >
+                    <option value="">{t("room.selectTarget")}</option>
+                    {undercoverAliveSeats.filter((seat) => seat !== mySeat).map((seat) => (
+                      <option key={seat} value={seat}>{seat}</option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  className="rounded px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  style={{ background: "var(--accent)" }}
+                  onClick={submitUndercoverAction}
+                  disabled={!canActNow || (undercoverAction === "clue" ? !undercoverText.trim() : !undercoverTarget)}
+                >
+                  {t("room.submitAction")}
+                </button>
+              </div>
+            ) : gameType === "guandan" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={guandanAction}
+                  onChange={(e) => setGuandanAction(e.target.value)}
+                  className="rounded border px-2 py-1.5 text-xs"
+                  style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 88%, transparent)", color: "var(--fg)" }}
+                >
+                  <option value="pass">pass</option>
+                  <option value="play">play</option>
+                </select>
+                {guandanAction === "play" ? (
+                  <input
+                    value={guandanCards}
+                    onChange={(e) => setGuandanCards(e.target.value)}
+                    className="min-w-[220px] flex-1 rounded border px-2 py-1.5 text-xs"
+                    style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 88%, transparent)", color: "var(--fg)" }}
+                    placeholder={t("room.cardsInputHint")}
+                  />
+                ) : null}
+                <button
+                  className="rounded px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                  style={{ background: "var(--accent)" }}
+                  onClick={submitGuandanAction}
+                  disabled={!canActNow || (guandanAction === "play" && !guandanCards.trim())}
+                >
+                  {t("room.submitAction")}
+                </button>
+              </div>
+            ) : (
+              <div className="text-[11px]" style={{ color: "var(--muted)" }}>{t("room.clickBoardToMove")}</div>
+            )}
+          </div>
+        ) : null}
         <div className="grid flex-1 grid-cols-1 gap-3 xl:grid-cols-[1fr_260px]">
           <div className="flex items-center justify-center">
           {wsReady ? (
@@ -1212,6 +1398,11 @@ export function RoomClient({ roomId }: { roomId: string }) {
                   </>
                 )}
                 <div className="mt-1 text-xs" style={{ color: "color-mix(in oklab, var(--fg) 72%, transparent)" }}>{t("room.totalMoves")}: {Number((gameState as any)?.moveCount || 0)}</div>
+                {isDefaultAutoResetRoom ? (
+                  <div className="mt-1 text-xs" style={{ color: "color-mix(in oklab, var(--fg) 72%, transparent)" }}>
+                    {lang === "zh" ? `默认房间将在 ${autoResetRemainingSec} 秒后自动重置` : `Default room auto-resets in ${autoResetRemainingSec}s`}
+                  </div>
+                ) : null}
                 <div className="mt-4 flex flex-wrap justify-center gap-2">
                   {joinedAsPlayer ? (
                     <>
@@ -1233,9 +1424,11 @@ export function RoomClient({ roomId }: { roomId: string }) {
                   ) : null}
                   {isOwner ? (
                     <>
-                      <button className="rounded border border-[var(--border)] px-3 py-1.5 text-xs font-semibold" style={{ color: "var(--fg)" }} onClick={resetRoom} disabled={roomResetting}>
-                        {roomResetting ? t("room.resetting") : t("room.resetRoom")}
-                      </button>
+                      {!isDefaultAutoResetRoom ? (
+                        <button className="rounded border border-[var(--border)] px-3 py-1.5 text-xs font-semibold" style={{ color: "var(--fg)" }} onClick={resetRoom} disabled={roomResetting}>
+                          {roomResetting ? t("room.resetting") : t("room.resetRoom")}
+                        </button>
+                      ) : null}
                       <button className="rounded border border-[var(--border)] px-3 py-1.5 text-xs font-semibold" style={{ color: "var(--fg)" }} onClick={leaveRoomAsOwner} disabled={roomLeaving}>
                         {roomLeaving ? t("room.leavingRoom") : t("room.leaveRoom")}
                       </button>
@@ -1252,9 +1445,17 @@ export function RoomClient({ roomId }: { roomId: string }) {
                     const y = Math.floor(i / boardSize);
                     const v = board?.[y]?.[x];
                     return (
-                      <div className="gomoku-cell" key={i}>
+                      <button
+                        type="button"
+                        className="gomoku-cell"
+                        key={i}
+                        onClick={() => {
+                          if (!canActNow || v) return;
+                          sendMove({ x, y });
+                        }}
+                      >
                         {renderStone(v)}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -1267,11 +1468,20 @@ export function RoomClient({ roomId }: { roomId: string }) {
                     const y = Math.floor(i / boardSize);
                     const v = board?.[y]?.[x];
                     return (
-                      <div key={i} className="relative aspect-square min-h-[22px] min-w-[22px]" style={{ background: "rgba(117, 76, 36, 0.18)" }}>
+                      <button
+                        type="button"
+                        key={i}
+                        className="relative aspect-square min-h-[22px] min-w-[22px]"
+                        style={{ background: "rgba(117, 76, 36, 0.18)" }}
+                        onClick={() => {
+                          if (!canActNow || v) return;
+                          sendMove({ x, y });
+                        }}
+                      >
                         <div className="absolute inset-x-[8%] top-1/2 h-px -translate-y-1/2 bg-[rgba(92,56,22,0.55)]" />
                         <div className="absolute inset-y-[8%] left-1/2 w-px -translate-x-1/2 bg-[rgba(92,56,22,0.55)]" />
                         <div className="absolute inset-[13%] flex items-center justify-center">{renderStone(v)}</div>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -1284,15 +1494,36 @@ export function RoomClient({ roomId }: { roomId: string }) {
                     const y = Math.floor(i / boardWidth);
                     const v = board?.[y]?.[x];
                     const isDark = (x + y) % 2 === 1;
+                    const square = `${String.fromCharCode(97 + x)}${boardHeight - y}`;
+                    const active = selectedFrom === square;
                     return (
-                      <div
+                      <button
+                        type="button"
                         key={i}
                         className="aspect-square min-h-[34px] min-w-[34px]"
-                        style={{ background: isDark ? "#b77940" : "#f2d7b0" }}
+                        style={{
+                          background: isDark ? "#b77940" : "#f2d7b0",
+                          outline: active ? "2px solid #fb923c" : "none",
+                          outlineOffset: active ? "-2px" : "0",
+                        }}
                         title={typeof v === "string" ? v : ""}
+                        onClick={() => {
+                          if (!canActNow) return;
+                          if (!selectedFrom) {
+                            if (!v) return;
+                            setSelectedFrom(square);
+                            return;
+                          }
+                          if (selectedFrom === square) {
+                            setSelectedFrom("");
+                            return;
+                          }
+                          sendMove({ from: selectedFrom, to: square });
+                          setSelectedFrom("");
+                        }}
                       >
                         {renderPiece(v, "chess")}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -1304,8 +1535,33 @@ export function RoomClient({ roomId }: { roomId: string }) {
                     const x = i % boardWidth;
                     const y = Math.floor(i / boardWidth);
                     const v = board?.[y]?.[x];
+                    const square = `${String.fromCharCode(97 + x)}${y}`;
+                    const active = selectedFrom === square;
                     return (
-                      <div key={i} className="relative aspect-square min-h-[34px] min-w-[34px]" title={typeof v === "string" ? v : ""}>
+                      <button
+                        type="button"
+                        key={i}
+                        className="relative aspect-square min-h-[34px] min-w-[34px]"
+                        title={typeof v === "string" ? v : ""}
+                        style={{
+                          outline: active ? "2px solid #fb923c" : "none",
+                          outlineOffset: active ? "-2px" : "0",
+                        }}
+                        onClick={() => {
+                          if (!canActNow) return;
+                          if (!selectedFrom) {
+                            if (!v) return;
+                            setSelectedFrom(square);
+                            return;
+                          }
+                          if (selectedFrom === square) {
+                            setSelectedFrom("");
+                            return;
+                          }
+                          sendMove({ from: selectedFrom, to: square });
+                          setSelectedFrom("");
+                        }}
+                      >
                         <div className="absolute inset-x-[8%] top-1/2 h-px -translate-y-1/2 bg-[rgba(92,56,22,0.55)]" />
                         <div className="absolute inset-y-[8%] left-1/2 w-px -translate-x-1/2 bg-[rgba(92,56,22,0.55)]" />
                         {v ? (
@@ -1313,7 +1569,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
                             {renderPiece(v, "xiangqi")}
                           </div>
                         ) : null}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -1365,10 +1621,35 @@ export function RoomClient({ roomId }: { roomId: string }) {
                     const x = i % boardWidth;
                     const y = Math.floor(i / boardWidth);
                     const v = board?.[y]?.[x];
+                    const square = `${String.fromCharCode(97 + x)}${y}`;
+                    const active = selectedFrom === square;
                     return (
-                      <div key={i} className="flex aspect-square min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border text-center text-[11px] font-semibold uppercase" style={{ borderColor: "rgba(255,255,255,0.08)", background: v ? "linear-gradient(180deg, rgba(217,165,90,0.18) 0%, rgba(255,255,255,0.04) 100%)" : "rgba(255,255,255,0.03)", color: "#fff1d5" }}>
+                      <button
+                        type="button"
+                        key={i}
+                        className="flex aspect-square min-h-[44px] min-w-[44px] items-center justify-center rounded-xl border text-center text-[11px] font-semibold uppercase"
+                        style={{
+                          borderColor: active ? "#fb923c" : "rgba(255,255,255,0.08)",
+                          background: v ? "linear-gradient(180deg, rgba(217,165,90,0.18) 0%, rgba(255,255,255,0.04) 100%)" : "rgba(255,255,255,0.03)",
+                          color: "#fff1d5",
+                        }}
+                        onClick={() => {
+                          if (!canActNow) return;
+                          if (!selectedFrom) {
+                            if (!v) return;
+                            setSelectedFrom(square);
+                            return;
+                          }
+                          if (selectedFrom === square) {
+                            setSelectedFrom("");
+                            return;
+                          }
+                          sendMove({ from: selectedFrom, to: square });
+                          setSelectedFrom("");
+                        }}
+                      >
                         {typeof v === "string" ? v.replace("_", "\n") : ""}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -1386,6 +1667,45 @@ export function RoomClient({ roomId }: { roomId: string }) {
                   {String((gameState as any)?.board?.reveal || "Clues are circulating. Someone at the table is off by one word.")}
                 </div>
                 {renderPlayerRail()}
+              </div>
+            ) : gameType === "guandan" ? (
+              <div className="w-full max-w-5xl rounded-[30px] border p-6" style={{ borderColor: "rgba(240,184,92,0.3)", background: "linear-gradient(180deg, rgba(36,13,6,0.97) 0%, rgba(84,31,14,0.93) 100%)", boxShadow: "0 24px 80px rgba(20,8,3,0.45)" }}>
+                <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "rgba(255,242,222,0.62)" }}>Partner Table</div>
+                    <div className="text-xl font-semibold" style={{ color: "#fff2de" }}>
+                      Turn: {turnText}
+                    </div>
+                  </div>
+                  <div className="rounded-full px-4 py-1.5 text-xs font-semibold" style={{ background: "rgba(255,255,255,0.08)", color: "#fff2de", border: "1px solid rgba(255,255,255,0.14)" }}>
+                    Team NS vs Team EW
+                  </div>
+                </div>
+
+                <div className="mb-4 rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "#fff2de" }}>
+                  {guandanLastPlay?.combo ? (
+                    <span>
+                      Last Play: {String(guandanLastPlay.seat || "-")} · {String(guandanLastPlay.combo.type || "")} ({Number(guandanLastPlay.combo.length || 0)})
+                    </span>
+                  ) : (
+                    <span>No active trick</span>
+                  )}
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {["north", "east", "south", "west"].map((seat) => (
+                    <div key={seat} className="rounded-xl border px-3 py-2 text-sm" style={{ borderColor: "rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.04)", color: "#fff2de" }}>
+                      <div className="flex items-center justify-between">
+                        <span className="uppercase tracking-[0.16em] text-[11px]" style={{ color: "rgba(255,242,222,0.74)" }}>{seat}</span>
+                        <span>{Number(guandanHandCounts[seat] || 0)} cards</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-4 rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.05)", color: "#fff2de" }}>
+                  Finished Order: {guandanFinished.length ? guandanFinished.join(" > ") : "-"}
+                </div>
               </div>
             ) : (
               <div className="w-full max-w-xl rounded-xl border border-slate-700 bg-slate-900/50 p-6 text-center text-slate-300">
@@ -1493,7 +1813,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
         </div>
       </section>
 
-      <aside className="hidden border-t p-3 lg:block lg:border-t-0 lg:border-l" style={{ borderColor: "var(--border)" }}>
+      <aside className="hidden border-t p-3 lg:block lg:h-[calc(100vh-60px)] lg:overflow-y-auto lg:border-t-0 lg:border-l" style={{ borderColor: "var(--border)" }}>
         <div className="mb-2 flex items-center justify-between">
           <b>{t("room.online")}</b>
           <span className="text-xs text-slate-400">{allOnlineCount}</span>
@@ -1501,13 +1821,14 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
         <b className="text-xs text-slate-400">{t("room.players")}</b>
         <div className="mt-1 space-y-2">
-          {realPlayers.map((u) => {
+          {allPlayerEntries.map((u) => {
             const rowIsOwner = isOwnerId(u.id);
+            const type = u.id.startsWith("openclaw:") ? "openclaw" : "user";
             return (
               <div className="flex items-center gap-2 text-sm" key={`u_${u.id}`}>
-                <img src={avatarById(u.id)} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-7 w-7 cursor-pointer rounded-full border border-slate-700 object-cover" alt="avatar" onClick={() => openProfileCard(u.id, "user")} />
-                <span className="group relative min-w-0 flex-1 truncate cursor-pointer" title={rowIsOwner ? t("room.owner") : undefined} onClick={() => openProfileCard(u.id, "user")}>
-                  {displayNameById(u.id)}
+                <img src={avatarById(u.id, type)} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-7 w-7 cursor-pointer rounded-full border border-slate-700 object-cover" alt="avatar" onClick={() => openProfileCard(u.id, type)} />
+                <span className="group relative min-w-0 flex-1 truncate cursor-pointer" title={rowIsOwner ? t("room.owner") : undefined} onClick={() => openProfileCard(u.id, type)}>
+                  {displayNameById(u.id, type)}
                   {rowIsOwner ? <span className="ml-1 inline-flex items-center rounded px-1 py-0.5 text-[10px] align-middle" style={{ background: "color-mix(in oklab, #f59e0b 22%, transparent)", color: "var(--fg)" }}>{t("room.owner")}</span> : null}
                   {rowIsOwner ? <span className="pointer-events-none absolute -top-6 left-0 rounded bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-200 opacity-0 transition group-hover:opacity-100">{t("room.owner")}</span> : null}
                 </span>
@@ -1517,15 +1838,15 @@ export function RoomClient({ roomId }: { roomId: string }) {
           {botPlayers.map((u) => {
             const canRemoveThisBot = Boolean(me?.id)
               && statusText === "waiting"
-              && (isOwner || u.id.startsWith(`bot:${me?.id}:`));
+              && (isOwner || u.botId.startsWith(`bot:${me?.id}:`));
             return (
-              <div className="flex items-center gap-2 text-sm" key={`bot_${u.id}`}>
-                <img src={avatarById(u.id)} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-7 w-7 rounded-full border border-slate-700 object-cover" alt="bot" />
-                <span className="min-w-0 flex-1 truncate">{displayNameById(u.id)}</span>
+              <div className="flex items-center gap-2 text-sm" key={`bot_${u.botId}`}>
+                <img src={avatarById(u.id, "openclaw")} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-7 w-7 rounded-full border border-slate-700 object-cover" alt="bot" />
+                <span className="min-w-0 flex-1 truncate">{displayNameById(u.id, "openclaw")}</span>
                 {canRemoveThisBot ? (
                   <button
                     className="inline-flex h-6 w-6 items-center justify-center rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-                    onClick={() => removeBot(u.id)}
+                    onClick={() => removeBot(u.botId)}
                     disabled={botRemoving}
                     aria-label={botRemoving ? t("room.removingBot") : t("room.removeBot")}
                     title={botRemoving ? t("room.removingBot") : t("room.removeBot")}
@@ -1542,19 +1863,6 @@ export function RoomClient({ roomId }: { roomId: string }) {
               </div>
             );
           })}
-        </div>
-
-        <b className="mt-3 block text-xs text-slate-400">{t("room.openclaw")}</b>
-        <div className="mt-1 space-y-2">
-          {online.openclaw?.map((u) => (
-            <div className="flex items-center gap-2 text-sm" key={`o_${u.id}`}>
-              <img src={avatarById(u.id, "openclaw")} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-7 w-7 cursor-pointer rounded-full border border-slate-700 object-cover" alt="avatar" onClick={() => openProfileCard(u.id, "openclaw")} />
-              <span className="truncate cursor-pointer" title={isOwnerId(u.id) ? t("room.owner") : undefined} onClick={() => openProfileCard(u.id, "openclaw")}>
-                {displayNameById(u.id, "openclaw")}
-                {isOwnerId(u.id) ? <span className="ml-1 inline-flex items-center rounded px-1 py-0.5 text-[10px] align-middle" style={{ background: "color-mix(in oklab, #f59e0b 22%, transparent)", color: "var(--fg)" }}>{t("room.owner")}</span> : null}
-              </span>
-            </div>
-          ))}
         </div>
 
         <b className="mt-3 block text-xs text-slate-400">{t("room.spectators")}</b>
@@ -1632,35 +1940,25 @@ export function RoomClient({ roomId }: { roomId: string }) {
         </div>
       ) : null}
 
-      {showBindGuard ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-4" onClick={() => setShowBindGuard(false)}>
-          <div
-            className="w-full max-w-md rounded-2xl border p-5"
-            style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 96%, transparent)" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="text-base font-semibold" style={{ color: "var(--fg)" }}>
-              {t("bindGuard.title")}
-            </div>
-            <div className="mt-2 text-sm" style={{ color: "var(--muted)" }}>
-              {t("bindGuard.desc")}
-            </div>
-            <div className="mt-4 flex gap-2">
-              <a
-                href="/"
-                className="inline-flex rounded-full px-4 py-2 text-sm font-semibold"
-                style={{ background: "var(--accent)", color: "#fff" }}
-              >
-                {t("bindGuard.backHome")}
-              </a>
+      {openclawBindModalOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-4" onClick={() => setOpenclawBindModalOpen(false)}>
+          <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-4" onClick={(e) => e.stopPropagation()}>
+            <div className="text-base font-semibold">{t("room.openclawBindRequiredTitle")}</div>
+            <div className="mt-2 text-sm text-slate-300">{t("room.toastOpenclawBindRequired")}</div>
+            <div className="mt-4 flex justify-end gap-2">
               <button
-                type="button"
-                className="inline-flex rounded-full border px-4 py-2 text-sm"
-                style={{ borderColor: "var(--border)", color: "var(--fg)" }}
-                onClick={() => setShowBindGuard(false)}
+                className="rounded border border-slate-700 px-3 py-1.5 text-xs text-slate-200"
+                onClick={() => setOpenclawBindModalOpen(false)}
               >
-                {t("bindGuard.skip")}
+                {t("room.close")}
               </button>
+              <a
+                href="/profile/"
+                className="rounded bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white"
+                onClick={() => setOpenclawBindModalOpen(false)}
+              >
+                {t("room.goBindOpenclaw")}
+              </a>
             </div>
           </div>
         </div>

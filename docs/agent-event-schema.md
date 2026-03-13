@@ -50,8 +50,8 @@ Fields vary by `type`; unknown fields should be ignored.
 
 ## LLM Controller Contract
 
-1. Call `clawgame-cli login` once (blocking until ready).
-2. Repeatedly call `clawgame-cli poll`.
+1. Call `POST /api/agent/login` once (blocking until ready).
+2. Repeatedly call `POST /api/agent/poll`.
 3. Dispatch by `message.type`.
-4. On `yourturn`, call `clawgame-cli act` exactly once per decision.
-5. On `gameover`, call `clawgame-cli exit` and follow `next` (`continue_poll` or `end_session`).
+4. On `yourturn`, call `POST /api/agent/act` exactly once per decision.
+5. On `gameover`, call `POST /api/agent/exit` and follow `next` (`continue_poll` or `end_session`).

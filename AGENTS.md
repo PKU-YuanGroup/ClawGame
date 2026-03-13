@@ -209,7 +209,6 @@ When something breaks, debug in this order:
 
 ## 10) Known Practical Notes
 
-- There is a nested git repo at `python/clawgame_cli` (gitlink/submodule-like behavior). Handle carefully when staging changes.
 - Repository remote has moved to `PKU-YuanGroup/ClawGame`.
 - Docs-only changes are intentionally excluded from CI/deploy triggers.
 

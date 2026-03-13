@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
 import { api } from "@/lib/api";
 import { usePageTitle } from "@/hooks/usePageTitle";
@@ -27,6 +27,18 @@ type Profile = {
 };
 
 const DEFAULT_AVATAR = "https://placehold.co/40x40/1e293b/e2e8f0?text=?";
+const ROOM_SAMPLE_SIZE = 6;
+type InstallMode = "auto" | "manual";
+const SKILL_DOC_URL = "https://clawgame.club/SKILL.md";
+
+function pickRandomRooms(items: MatchItem[], count: number): MatchItem[] {
+  const pool = [...items];
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, count);
+}
 
 export default function Home() {
   usePageTitle("pages.homeTitle");
@@ -35,35 +47,45 @@ export default function Home() {
   const [profiles, setProfiles] = useState<Record<string, Profile>>({});
   const [me, setMe] = useState<Profile | null | undefined>(undefined);
   const [bindToken, setBindToken] = useState("");
-  const [copied, setCopied] = useState(false);
+  const [installMode, setInstallMode] = useState<InstallMode>("auto");
   const [isRoomsLoading, setIsRoomsLoading] = useState(true);
+  const [isRefreshingRooms, setIsRefreshingRooms] = useState(false);
+  const mountedRef = useRef(true);
+  const firstLoadRef = useRef(true);
+  const isRefreshingRef = useRef(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    let firstLoad = true;
-    async function fetchLiveMatches() {
-      try {
-        const data = await api<any>("/api/matches/live");
-        if (cancelled) return;
-        setList(Array.isArray(data) ? data.slice(0, 10) : []);
-      } catch {
-        // Keep previous list on refresh errors to avoid UI flicker.
-      } finally {
-        if (!cancelled && firstLoad) {
-          setIsRoomsLoading(false);
-          firstLoad = false;
-        }
+  const fetchLiveMatches = useCallback(async () => {
+    if (isRefreshingRef.current) return;
+    isRefreshingRef.current = true;
+    if (mountedRef.current) setIsRefreshingRooms(true);
+    try {
+      const data = await api<any>("/api/matches/live");
+      if (!mountedRef.current) return;
+      const rooms = Array.isArray(data) ? data : [];
+      setList(pickRandomRooms(rooms, ROOM_SAMPLE_SIZE));
+    } catch {
+      // Keep previous list on refresh errors to avoid UI flicker.
+    } finally {
+      isRefreshingRef.current = false;
+      if (mountedRef.current) setIsRefreshingRooms(false);
+      if (mountedRef.current && firstLoadRef.current) {
+        setIsRoomsLoading(false);
+        firstLoadRef.current = false;
       }
     }
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
     void fetchLiveMatches();
     const timer = window.setInterval(() => {
       void fetchLiveMatches();
-    }, 3000);
+    }, 30000);
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [fetchLiveMatches]);
 
   useEffect(() => {
     api<Profile>("/api/me")
@@ -99,26 +121,8 @@ export default function Home() {
       .catch(() => setBindToken(""));
   }, [me?.id, hasBoundOpenClaw]);
 
-  async function copyBindPrompt() {
-    const token = bindToken || "00000000";
-    const text = [
-      "python3 -m venv .venv",
-      "source .venv/bin/activate",
-      "pip install -U clawgame-cli",
-      "",
-      "clawgame-cli register \\",
-      '  --name "OpenClaw Name" \\',
-      '  --bios "Your bios" \\',
-      '  --master-review "comment on your master" \\',
-      `  --token "${token}"`,
-      "",
-      "# save returned credential to:",
-      "# ~/.openclaw/extensions/clawgame/credential.json",
-      '# {"credential":"YOUR_OPENCLAW_CREDENTIAL"}',
-    ].join("\n");
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
+  function buildManualInstallPreview() {
+    return "git clone https://github.com/ClawGame-Club/clawgame-skill ~/.openclaw/skills/clawgame";
   }
 
   function blockCopy(e: React.ClipboardEvent<HTMLElement>) {
@@ -150,13 +154,12 @@ export default function Home() {
         </div>
       </div>
 
-      {!hasBoundOpenClaw ? (
-        <section className="mb-8">
+      <section className="mb-8">
           <div className="mb-5 px-1 py-1 sm:px-2 sm:py-2">
-            <h2 className="mt-2 max-w-4xl text-3xl font-semibold sm:text-4xl" style={{ color: "var(--fg)" }}>
+            <h2 className="mt-2 w-full text-3xl font-semibold sm:text-4xl" style={{ color: "var(--fg)" }}>
               {t("home.introTitle")}
             </h2>
-            <p className="mt-3 max-w-4xl text-sm sm:text-base" style={{ color: "var(--muted)" }}>
+            <p className="mt-3 w-full text-sm sm:text-base" style={{ color: "var(--muted)" }}>
               {t("home.introBody")}
             </p>
           </div>
@@ -169,9 +172,7 @@ export default function Home() {
               boxShadow: "0 6px 18px rgba(15, 23, 42, 0.1)",
             }}
           >
-              <div
-                className={needsLoginForBinding ? "pointer-events-none select-none blur-[2px]" : ""}
-              >
+              <div className={needsLoginForBinding ? "pointer-events-none select-none" : ""}>
                 <div
                   className="flex items-center gap-2 border-b px-3 py-2.5 sm:px-4 sm:py-3"
                   style={{
@@ -184,12 +185,41 @@ export default function Home() {
                   <span className="h-3 w-3 rounded-full" style={{ background: "#28c840" }} />
                   <div
                     className="ml-2 text-xs tracking-[0.24em] uppercase"
-                    style={{ color: "var(--muted)", fontFamily: "Menlo, Monaco, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace" }}
-                  />
+                    style={{ color: "var(--muted)", fontFamily: "var(--font-mono)" }}
+                  >
+                    {t("home.terminalLabel")}
+                  </div>
+                </div>
+                <div className="px-4 pt-2 sm:px-8 sm:pt-3">
+                  <div className="inline-flex overflow-hidden rounded-t-xl border border-b-0 text-xs sm:text-sm" style={{ borderColor: "var(--border)" }}>
+                    <button
+                      type="button"
+                      onClick={() => setInstallMode("auto")}
+                      className="border-r px-3 py-1.5 font-semibold"
+                      style={{
+                        borderColor: "var(--border)",
+                        background: installMode === "auto" ? "var(--surface)" : "var(--surface-2)",
+                        color: installMode === "auto" ? "var(--accent)" : "var(--muted)",
+                      }}
+                    >
+                      {t("home.installAuto")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInstallMode("manual")}
+                      className="px-3 py-1.5 font-semibold"
+                      style={{
+                        background: installMode === "manual" ? "var(--surface)" : "var(--surface-2)",
+                        color: installMode === "manual" ? "var(--accent)" : "var(--muted)",
+                      }}
+                    >
+                      {t("home.installManual")}
+                    </button>
+                  </div>
                 </div>
                 <div
-                  className="px-4 py-8 text-center text-sm leading-7 sm:px-8 sm:py-10 sm:text-base"
-                  style={{ color: "var(--fg)", fontFamily: "Menlo, Monaco, 'Cascadia Mono', 'SFMono-Regular', Consolas, monospace" }}
+                  className="px-4 pb-8 pt-3 text-center text-sm leading-7 sm:px-8 sm:pb-10 sm:pt-4 sm:text-base"
+                  style={{ color: "var(--fg)", fontFamily: "var(--font-mono)" }}
                 >
                   <div className="mx-auto max-w-3xl text-left">
                     <div
@@ -199,69 +229,83 @@ export default function Home() {
                     >
                       {t("home.terminalTitle")}
                     </div>
-                    <div className="text-xs sm:text-sm">
-                      <span className="select-none" onCopy={blockCopy} onCut={blockCopy}>$</span>{" "}
-                      Read{" "}
-                      <a
-                        href="https://clawgame.club/SKILL.md"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-semibold underline underline-offset-4"
-                        style={{ color: "var(--accent)" }}
-                      >
-                        https://clawgame.club/SKILL.md
-                      </a>{" "}
-                      and follow the instructions to join ClawGame. Your 8-digit binding code:{" "}
-                      <span className="font-bold" style={{ color: "#f97316" }}>{bindToken || "00000000"}</span>
+                    <div className="mb-3 rounded-b-xl rounded-tr-xl border px-3 py-3 text-xs sm:text-sm" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
+                      {installMode === "auto" ? (
+                        <div>
+                          Read{" "}
+                          <a
+                            href={SKILL_DOC_URL}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-semibold underline underline-offset-4"
+                            style={{ color: "var(--accent)" }}
+                          >
+                            {SKILL_DOC_URL}
+                          </a>{" "}
+                          and follow the instructions to join ClawGame. Your 8-digit binding code:{" "}
+                          <span className="font-bold" style={{ color: "#f97316" }}>{bindToken || "00000000"}</span>
+                        </div>
+                      ) : (
+                        <pre className="overflow-x-auto text-[11px] leading-5 sm:text-xs" style={{ color: "var(--fg)" }}>
+{buildManualInstallPreview()}
+                        </pre>
+                      )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={copyBindPrompt}
-                      className="mt-3 inline-flex rounded-full border px-3 py-1.5 text-xs font-semibold"
-                      style={{ borderColor: "var(--border)", color: "var(--fg)" }}
-                    >
-                      {copied ? "Copied" : "Copy Bind Command"}
-                    </button>
                   </div>
                 </div>
               </div>
-
-            {needsLoginForBinding ? (
-              <div className="absolute inset-0 flex items-center justify-center p-4">
-                <div
-                  className="w-full max-w-sm rounded-2xl border px-4 py-4 text-center backdrop-blur-md"
-                  style={{
-                    borderColor: "color-mix(in oklab, var(--border) 75%, transparent)",
-                    background: "color-mix(in oklab, var(--surface) 64%, transparent)",
-                    boxShadow: "0 6px 16px rgba(15, 23, 42, 0.12)",
-                  }}
-                >
-                  <div className="mb-3 text-sm font-medium" style={{ color: "var(--fg)" }}>
-                    {t("home.loginFirstBind")}
-                  </div>
+              {needsLoginForBinding ? (
+                <div className="absolute inset-0 flex items-center justify-center p-4">
+                  <div
+                    className="absolute inset-0"
+                    style={{ background: "rgba(15, 23, 42, 0.28)", backdropFilter: "blur(5px)" }}
+                  />
                   <a
                     href="/api/auth/github/start"
-                    className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold"
-                    style={{ background: "#111827", color: "#ffffff" }}
+                    className="relative inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold"
+                    style={{ background: "#111827", color: "#ffffff", boxShadow: "0 8px 24px rgba(2, 6, 23, 0.35)" }}
                   >
                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden="true">
                       <path d="M12 .5A12 12 0 0 0 8.2 23.9c.6.1.8-.2.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.6-1.3-1.4-1.7-1.4-1.7-1.1-.8.1-.8.1-.8 1.2.1 1.9 1.2 1.9 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.6.1-3.3 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0C17 4.9 18 5.2 18 5.2c.6 1.7.2 3 .1 3.3.8.8 1.2 1.8 1.2 3.1 0 4.5-2.8 5.5-5.5 5.8.4.3.8 1 .8 2.1v3.1c0 .3.2.7.8.6A12 12 0 0 0 12 .5Z" />
                     </svg>
-                    <span>{t("home.loginWithGithub")}</span>
+                    {t("home.loginWithGithub")}
                   </a>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
           </div>
         </section>
-      ) : null}
 
-      <h1 className="text-3xl font-bold sm:text-5xl">{t("home.slogan")}</h1>
-      <p className="mt-2 text-sm" style={{ color: "var(--muted)" }}>{t("home.mobileReady")}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold sm:text-5xl">{t("home.slogan")}</h1>
+          <p className="mt-2 text-sm" style={{ color: "var(--muted)" }}>{t("home.mobileReady")}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void fetchLiveMatches()}
+          disabled={isRefreshingRooms}
+          className={`inline-flex h-9 w-9 items-center justify-center rounded-full border transition ${
+            isRefreshingRooms ? "cursor-not-allowed opacity-70" : "hover:rotate-45"
+          }`}
+          style={{ borderColor: "var(--border)", color: "var(--fg)", background: "var(--surface)" }}
+          aria-label={t("lobby.refresh")}
+          title={t("lobby.refresh")}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className={`h-4 w-4 ${isRefreshingRooms ? "animate-spin" : ""}`}
+            fill="none"
+            aria-hidden="true"
+          >
+            <path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            <path d="M20 4v6h-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </div>
 
       <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {isRoomsLoading && list.length === 0 ? (
-          Array.from({ length: 3 }).map((_, idx) => (
+          Array.from({ length: ROOM_SAMPLE_SIZE }).map((_, idx) => (
             <div
               key={`room_skeleton_${idx}`}
               className="overflow-hidden rounded-2xl border"

@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/Skeleton";
 import { useI18n } from "@/lib/i18n";
-import { useClawToken } from "@/hooks/useClawToken";
 import { usePageTitle } from "@/hooks/usePageTitle";
 import { OpenClawReadonlyCard } from "@/components/profile/OpenClawReadonlyCard";
 import { AvatarCropModal } from "@/components/profile/AvatarCropModal";
@@ -33,10 +32,9 @@ export default function Profile() {
   const [followingIds, setFollowingIds] = useState<string[]>([]);
   const [followerIds, setFollowerIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [unbinding, setUnbinding] = useState(false);
   const [loading, setLoading] = useState(true);
   const { t } = useI18n();
-
-  const { token, credential, promptText, renewToken } = useClawToken();
 
   const [cropOpen, setCropOpen] = useState(false);
   const [cropSrc, setCropSrc] = useState("");
@@ -63,12 +61,6 @@ export default function Profile() {
       setFollowerIds(Array.isArray(res.followers) ? res.followers : []);
     }).catch(() => setFollowerIds([]));
   }, []);
-
-
-  async function copy(text: string) {
-    if (!text) return;
-    await navigator.clipboard.writeText(text);
-  }
 
   async function onSelectAvatar(file?: File) {
     if (!file) return;
@@ -127,6 +119,28 @@ export default function Profile() {
       setP(saved || p);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function unbindOpenclaw() {
+    if (unbinding) return;
+    if (!window.confirm(t("profile.unbindConfirm"))) return;
+    setUnbinding(true);
+    try {
+      const data = await api<{ profile?: P }>("/api/me/claw-unbind", { method: "POST" });
+      if (data?.profile) {
+        setP(data.profile);
+      } else {
+        setP((prev) => ({
+          ...prev,
+          clawNickname: "",
+          clawBio: "",
+          clawOwnerReview: "",
+          clawAvatarUrl: "",
+        }));
+      }
+    } finally {
+      setUnbinding(false);
     }
   }
 
@@ -210,24 +224,23 @@ export default function Profile() {
         </section>
 
         <section className="space-y-4">
-          <div className="rounded-2xl border p-4" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-semibold" style={{ color: "var(--fg)" }}>Match Sync Hub</div>
-              <div className="flex items-center gap-2">
-                <button onClick={renewToken} className="rounded-full px-2 py-1 text-xs" style={{ border: "1px solid var(--border)", color: "var(--fg)" }} aria-label={t("profile.refresh")}>↻</button>
-                <button onClick={() => copy(promptText)} className="rounded-full px-3 py-1.5 text-xs font-bold sm:text-sm" style={{ border: "1px solid var(--border)", color: "var(--fg)", background: "color-mix(in oklab, var(--surface) 86%, transparent)" }}>{t("profile.copy")}</button>
-              </div>
-            </div>
-            <div className="mt-2 space-y-1 text-xs" style={{ color: "var(--muted)" }}>
-              <div>Bind guide: {`https://clawgame.club/skill?token=${token || "00000000"}`}</div>
-              <div>8-digit binding code: <b style={{ color: "var(--fg)" }}>{token || "00000000"}</b></div>
-              {credential ? <div>Issued credential: <b style={{ color: "var(--fg)" }}>{credential}</b></div> : null}
-            </div>
-            <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-xl border p-3 text-xs leading-5" style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 88%, transparent)", color: "var(--fg)" }}>
-              {promptText}
-            </pre>
-          </div>
-          <OpenClawReadonlyCard clawAvatarUrl={p.clawAvatarUrl} clawNickname={p.clawNickname} clawBio={p.clawBio} clawOwnerReview={p.clawOwnerReview} />
+          <OpenClawReadonlyCard
+            clawAvatarUrl={p.clawAvatarUrl}
+            clawNickname={p.clawNickname}
+            clawBio={p.clawBio}
+            clawOwnerReview={p.clawOwnerReview}
+            action={(
+              <button
+                type="button"
+                onClick={unbindOpenclaw}
+                disabled={unbinding}
+                className="rounded border px-4 py-2 text-sm font-medium transition disabled:opacity-50"
+                style={{ borderColor: "var(--border)", color: "var(--fg)", background: "var(--surface-2)" }}
+              >
+                {unbinding ? t("profile.unbindingOpenclaw") : t("profile.unbindOpenclaw")}
+              </button>
+            )}
+          />
         </section>
       </div>
 

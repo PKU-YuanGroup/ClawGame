@@ -7,8 +7,8 @@ import { AGENT_EVENT_TYPES } from "./lib/agent-events";
 import { getUserProfile, requireUser } from "./lib/user";
 import { storeGet, storeList, storePut } from "./lib/store";
 import type { Env, LeaderboardEntry, UserProfile } from "./types";
-import { getGameRules, type AgentActRequest, type AgentJoinRequest, type AgentPollRequest } from "@openclaw/game-protocol";
-import { resolveUserByCredential } from "./lib/claw-auth";
+import { getGameRules, type AgentActRequest, type AgentJoinRequest, type AgentPollRequest, type RoomCommandRequest } from "@openclaw/game-protocol";
+import { getClawCredential, resolveUserByCredential } from "./lib/claw-auth";
 
 export { GameRoomDO };
 
@@ -16,17 +16,6 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
       const url = new URL(request.url);
-
-      if (request.method === "GET" && (url.pathname === "/skill" || url.pathname === "/skill/")) {
-        const token = url.searchParams.get("token") || "00000000";
-        const body = `Configure your OpenClaw profile with this script (fill values first):\n\nexport TOKEN="${token}"\nexport IMG="/absolute/path/to/avatar.png" # leave empty to skip avatar\nexport CLAW_NICKNAME="Your Nickname"\nexport CLAW_BIO="Your Bio"\nexport CLAW_OWNER_REVIEW="Your review for master"\n\npython3 - <<'PY'\nimport os, base64, requests\n\ntoken = os.environ["TOKEN"]\nimg = os.environ.get("IMG", "").strip()\n\nr = requests.post(\"https://clawgame.club/api/claw/config\", json={\n    \"token\": token,\n    \"clawNickname\": os.environ[\"CLAW_NICKNAME\"],\n    \"clawBio\": os.environ[\"CLAW_BIO\"],\n    \"clawOwnerReview\": os.environ[\"CLAW_OWNER_REVIEW\"]\n}, timeout=30)\nprint(\"register:\", r.status_code, r.text)\ncredential = \"\"\ntry:\n    credential = str((r.json() or {}).get(\"credential\") or \"\")\nexcept Exception:\n    credential = \"\"\n\nif img and credential:\n    if not os.path.exists(img):\n        print(\"Avatar file not found:\", img)\n    else:\n        with open(img, \"rb\") as f:\n            data_url = \"data:image/png;base64,\" + base64.b64encode(f.read()).decode()\n        a = requests.post(\"https://clawgame.club/api/claw/avatar-upload\",\n                          json={\"credential\": credential, \"dataUrl\": data_url}, timeout=30)\n        print(\"avatar-upload:\", a.status_code, a.text)\nelif img:\n    print(\"Skip avatar upload: missing credential\")\nelse:\n    print(\"Skip avatar upload\")\nPY\n\nThen run it directly.`;
-        return new Response(body, {
-          headers: {
-            "content-type": "text/plain; charset=utf-8",
-            "cache-control": "no-store",
-          },
-        });
-      }
 
       if (url.pathname === "/api/health") {
         return json({ ok: true, games: listGameTypes() });
@@ -102,35 +91,55 @@ export default {
         if (!initRes.ok) return json(initPayload, initRes.status);
 
         // Ensure owner user + owner OpenClaw participant both exist for ready-state checks.
-        await stub.fetch("https://room/join", {
+        await stub.fetch("https://room/command", {
           method: "POST",
-          body: JSON.stringify({ playerId: ownerUserId }),
+          body: JSON.stringify({
+            protocolVersion: "v1",
+            roomId,
+            actorType: "player",
+            actorId: ownerUserId,
+            command: { kind: "join" },
+          } satisfies RoomCommandRequest),
         });
-        const ownerOpenclawRes = await stub.fetch("https://room/join", {
+        const ownerOpenclawRes = await stub.fetch("https://room/command", {
           method: "POST",
-          body: JSON.stringify({ playerId: `openclaw:${agentA}` }),
+          body: JSON.stringify({
+            protocolVersion: "v1",
+            roomId,
+            actorType: "openclaw",
+            actorId: `openclaw:${agentA}`,
+            command: { kind: "join" },
+          } satisfies RoomCommandRequest),
         });
         const ownerOpenclawPayload = await ownerOpenclawRes.json<any>();
         if (!ownerOpenclawRes.ok) return json(ownerOpenclawPayload, ownerOpenclawRes.status);
+        const ownerJoinData = ownerOpenclawPayload?.data || ownerOpenclawPayload;
 
         const players: any[] = [
           {
             agentId: agentA,
             playerId: `openclaw:${agentA}`,
-            seat: ownerOpenclawPayload.seat || initPayload.seat,
-            playerToken: ownerOpenclawPayload.playerToken || initPayload.playerToken,
+            seat: ownerJoinData.seat || initPayload.seat,
+            playerToken: ownerJoinData.playerToken || initPayload.playerToken,
           },
         ];
 
         if (mode === "owner_vs_agent") {
           const agentB = String(body.agentB || "smoke_b");
-          const joinRes = await stub.fetch("https://room/join", {
+          const joinRes = await stub.fetch("https://room/command", {
             method: "POST",
-            body: JSON.stringify({ playerId: `openclaw:${agentB}` }),
+            body: JSON.stringify({
+              protocolVersion: "v1",
+              roomId,
+              actorType: "openclaw",
+              actorId: `openclaw:${agentB}`,
+              command: { kind: "join" },
+            } satisfies RoomCommandRequest),
           });
           const joinPayload = await joinRes.json<any>();
           if (!joinRes.ok) return json(joinPayload, joinRes.status);
-          players.push({ agentId: agentB, playerId: `openclaw:${agentB}`, seat: joinPayload.seat, playerToken: joinPayload.playerToken });
+          const joinData = joinPayload?.data || joinPayload;
+          players.push({ agentId: agentB, playerId: `openclaw:${agentB}`, seat: joinData.seat, playerToken: joinData.playerToken });
         } else if (mode === "owner_vs_bot") {
           const joinBotRes = await stub.fetch("https://room/room/join-bot", {
             method: "POST",
@@ -147,6 +156,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/api/lobby/public") {
+        await ensureDefaultPublicRooms(env);
         const gameType = url.searchParams.get("gameType");
         const list = await storeList(env, { prefix: "lobby:" });
         const rooms = await Promise.all(list.keys.map(async (k) => (await storeGet(env, k.name, "json")) as any));
@@ -154,6 +164,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/api/lobby/overview") {
+        await ensureDefaultPublicRooms(env);
         const gameType = String(url.searchParams.get("gameType") || "gomoku");
         const [rooms, leaderboard] = await Promise.all([
           buildLobbyOverview(request, env, gameType),
@@ -163,6 +174,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/api/matches/live") {
+        await ensureDefaultPublicRooms(env);
         const gameType = url.searchParams.get("gameType");
         const list = await storeList(env, { prefix: "lobby:" });
         const rooms = await Promise.all(
@@ -209,26 +221,67 @@ export default {
         if (lobby.visibility === "private" && lobby.inviteCode !== body.inviteCode) return json({ error: "invalid invite code" }, 403);
 
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
-        const res = await stub.fetch("https://room/join", {
+        const command: RoomCommandRequest = {
+          protocolVersion: "v1",
+          roomId: body.roomId,
+          actorType: "player",
+          actorId: me.userId,
+          command: { kind: "join", inviteCode: body.inviteCode },
+        };
+        const res = await stub.fetch("https://room/command", {
           method: "POST",
-          body: JSON.stringify({ playerId: me.userId, inviteCode: body.inviteCode }),
+          body: JSON.stringify(command),
         });
         const payload = await res.json<any>();
         if (!res.ok) return json(payload, res.status);
+        const joined = payload?.data || payload;
         const wsBase = wsBaseFromRequest(request);
         return json({
-          ...payload,
+          ...joined,
           ws: {
-            player: `${wsBase}/ws/room/${body.roomId}?token=${encodeURIComponent(payload.playerToken)}&role=player`,
-            agent: `${wsBase}/ws/room/${body.roomId}?token=${encodeURIComponent(payload.playerToken)}&role=agent`,
+            player: `${wsBase}/ws/room/${body.roomId}?token=${encodeURIComponent(joined.playerToken)}&role=player`,
+            agent: `${wsBase}/ws/room/${body.roomId}?token=${encodeURIComponent(joined.playerToken)}&role=agent`,
           },
         });
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/match/join-openclaw") {
+        const me = await requireUser(request, env);
+        const credential = await getClawCredential(env, me.userId);
+        if (!credential) return json({ error: "openclaw is not bound" }, 403);
+        const body = (await request.json()) as { roomId: string; inviteCode?: string };
+        const lobby = (await storeGet(env, `lobby:${body.roomId}`, "json")) as any;
+        if (!lobby) return json({ error: "room not found" }, 404);
+        if (lobby.visibility === "private" && lobby.inviteCode !== body.inviteCode) return json({ error: "invalid invite code" }, 403);
+
+        const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
+        const command: RoomCommandRequest = {
+          protocolVersion: "v1",
+          roomId: body.roomId,
+          actorType: "openclaw",
+          actorId: `openclaw:${me.userId}`,
+          command: { kind: "join", inviteCode: body.inviteCode },
+        };
+        const res = await stub.fetch("https://room/command", {
+          method: "POST",
+          body: JSON.stringify(command),
+        });
+        const payload = await res.json<any>();
+        if (!res.ok) return json(payload, res.status);
+        return json(payload?.data || payload);
       }
 
       if (request.method === "POST" && url.pathname === "/api/match/move") {
         const body = (await request.json()) as { roomId: string; playerToken: string; move: any };
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
-        const res = await stub.fetch("https://room/move", { method: "POST", body: JSON.stringify({ playerToken: body.playerToken, move: body.move }) });
+        const command: RoomCommandRequest = {
+          protocolVersion: "v1",
+          roomId: body.roomId,
+          actorType: "player",
+          playerToken: body.playerToken,
+          command: { kind: "move", move: body.move },
+        };
+        const res = await stub.fetch("https://room/command", { method: "POST", body: JSON.stringify(command) });
         return passthrough(res);
       }
 
@@ -365,19 +418,26 @@ export default {
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
         const canonicalAgentId = String(boundUserId);
         const playerId = `openclaw:${canonicalAgentId}`;
-        const joinRes = await stub.fetch("https://room/join", {
+        const joinRes = await stub.fetch("https://room/command", {
           method: "POST",
-          body: JSON.stringify({ playerId, inviteCode: body.inviteCode }),
+          body: JSON.stringify({
+            protocolVersion: "v1",
+            roomId: body.roomId,
+            actorType: "openclaw",
+            actorId: playerId,
+            command: { kind: "join", inviteCode: body.inviteCode },
+          } satisfies RoomCommandRequest),
         });
         const joinPayload = await joinRes.json<any>();
         if (!joinRes.ok) return json(joinPayload, joinRes.status);
+        const joinData = joinPayload?.data || joinPayload;
 
         return json({
           roomId: body.roomId,
           agentId: canonicalAgentId,
           playerId,
-          seat: joinPayload.seat,
-          playerToken: joinPayload.playerToken,
+          seat: joinData.seat,
+          playerToken: joinData.playerToken,
           protocolVersion: "v1",
         });
       }
@@ -501,9 +561,16 @@ export default {
         if (!chatText) return json({ error: "chatText is required" }, 400);
         const senderId = `openclaw:${boundUserId}`;
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
-        const chatRes = await stub.fetch("https://room/chat", {
+        const chatCommand: RoomCommandRequest = {
+          protocolVersion: "v1",
+          roomId: body.roomId,
+          actorType: "openclaw",
+          actorId: senderId,
+          command: { kind: "chat", text: chatText },
+        };
+        const chatRes = await stub.fetch("https://room/command", {
           method: "POST",
-          body: JSON.stringify({ senderType: "openclaw", senderId, text: chatText }),
+          body: JSON.stringify(chatCommand),
         });
         return passthrough(chatRes);
       }
@@ -530,13 +597,19 @@ export default {
 
         let effectivePlayerToken = await resolvePlayerToken();
         if (!effectivePlayerToken) {
-          const joinRes = await stub.fetch("https://room/join", {
+          const joinRes = await stub.fetch("https://room/command", {
             method: "POST",
-            body: JSON.stringify({ playerId }),
+            body: JSON.stringify({
+              protocolVersion: "v1",
+              roomId: body.roomId,
+              actorType: "openclaw",
+              actorId: playerId,
+              command: { kind: "join" },
+            } satisfies RoomCommandRequest),
           });
           if (joinRes.ok) {
             const joinData = await joinRes.json<any>();
-            effectivePlayerToken = String(joinData?.playerToken || "");
+            effectivePlayerToken = String((joinData?.data || joinData)?.playerToken || "");
           }
         }
         if (!effectivePlayerToken) return json({ ok: true, next: "end_session", reason: "agent_not_in_room" });
@@ -600,13 +673,19 @@ export default {
 
           let autoJoinedToken = "";
           if (!me) {
-            const autoJoinRes = await stub.fetch("https://room/join", {
+            const autoJoinRes = await stub.fetch("https://room/command", {
               method: "POST",
-              body: JSON.stringify({ playerId: `openclaw:${canonicalAgentId}` }),
+              body: JSON.stringify({
+                protocolVersion: "v1",
+                roomId: body.roomId,
+                actorType: "openclaw",
+                actorId: `openclaw:${canonicalAgentId}`,
+                command: { kind: "join" },
+              } satisfies RoomCommandRequest),
             });
             if (autoJoinRes.ok) {
               const autoJoinData = await autoJoinRes.json<any>();
-              autoJoinedToken = String(autoJoinData?.playerToken || "");
+              autoJoinedToken = String((autoJoinData?.data || autoJoinData)?.playerToken || "");
               const latestStateRes = await stub.fetch("https://room/state");
               if (latestStateRes.ok) {
                 const latestState = await latestStateRes.json<any>();
@@ -729,18 +808,28 @@ export default {
           let playerToken = await resolveTokenBySender();
           if (!playerToken) return json({ error: "playerToken is required when move is provided" }, 400);
 
-          let moveRes = await stub.fetch("https://room/move", {
+          const buildCommand = (token: string): RoomCommandRequest => ({
+            protocolVersion: "v1",
+            roomId: body.roomId,
+            actorType: "openclaw",
+            actorId: playerId,
+            playerToken: token,
+            actionId: actionId || undefined,
+            command: { kind: "move", move: body.move },
+          });
+
+          let moveRes = await stub.fetch("https://room/command", {
             method: "POST",
-            body: JSON.stringify({ playerToken, move: body.move }),
+            body: JSON.stringify(buildCommand(playerToken)),
           });
 
           // Token may be stale after reconnect; refresh by sender id once and retry.
           if (!moveRes.ok) {
             const refreshedToken = await resolveTokenBySender();
             if (refreshedToken && refreshedToken !== playerToken) {
-              moveRes = await stub.fetch("https://room/move", {
+              moveRes = await stub.fetch("https://room/command", {
                 method: "POST",
-                body: JSON.stringify({ playerToken: refreshedToken, move: body.move }),
+                body: JSON.stringify(buildCommand(refreshedToken)),
               });
             }
           }
@@ -751,13 +840,17 @@ export default {
 
         const chatText = String(body.chatText || "").trim();
         if (chatText) {
-          const chatRes = await stub.fetch("https://room/chat", {
+          const chatCommand: RoomCommandRequest = {
+            protocolVersion: "v1",
+            roomId: body.roomId,
+            actorType: "openclaw",
+            actorId: playerId,
+            actionId: actionId || undefined,
+            command: { kind: "chat", text: chatText },
+          };
+          const chatRes = await stub.fetch("https://room/command", {
             method: "POST",
-            body: JSON.stringify({
-              senderType: "openclaw",
-              senderId: playerId,
-              text: chatText,
-            }),
+            body: JSON.stringify(chatCommand),
           });
           if (!chatRes.ok) return passthrough(chatRes);
           chatResult = await chatRes.json<any>();
@@ -786,7 +879,22 @@ export default {
         const roomId = url.searchParams.get("roomId");
         if (!roomId) return json({ error: "roomId is required" }, 400);
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(roomId));
+        if (roomId.startsWith("DEFAULT-")) {
+          await stub.fetch("https://room/room/ensure-default", {
+            method: "POST",
+            body: JSON.stringify({ ownerId: DEFAULT_ROOM_OWNER_ID }),
+          });
+        }
         return passthrough(await stub.fetch("https://room/state"));
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/room/default-reset") {
+        const body = (await request.json()) as { roomId?: string };
+        const roomId = String(body?.roomId || "").trim();
+        if (!roomId) return json({ error: "roomId is required" }, 400);
+        if (!roomId.startsWith("DEFAULT-")) return json({ error: "only DEFAULT-* room is supported" }, 400);
+        const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(roomId));
+        return passthrough(await stub.fetch("https://room/room/default-reset", { method: "POST" }));
       }
 
       if (request.method === "GET" && url.pathname === "/api/room/online") {
@@ -807,9 +915,16 @@ export default {
         const body = (await request.json()) as { roomId: string; senderType: "user" | "openclaw" | "spectator"; senderId: string; text: string };
         if (!body.roomId) return json({ error: "roomId is required" }, 400);
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
-        const res = await stub.fetch("https://room/chat", {
+        const command: RoomCommandRequest = {
+          protocolVersion: "v1",
+          roomId: body.roomId,
+          actorType: body.senderType === "openclaw" ? "openclaw" : "player",
+          actorId: String(body.senderId || ""),
+          command: { kind: "chat", text: String(body.text || "") },
+        };
+        const res = await stub.fetch("https://room/command", {
           method: "POST",
-          body: JSON.stringify({ senderType: body.senderType, senderId: body.senderId, text: body.text }),
+          body: JSON.stringify(command),
         });
         return passthrough(res);
       }
@@ -861,6 +976,7 @@ export default {
 
 const ROOM_ID_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_ID_LENGTH = 8;
+const DEFAULT_ROOM_OWNER_ID = "clawgame";
 
 function randomRoomId(): string {
   let value = "";
@@ -878,6 +994,63 @@ async function allocateRoomId(env: Env): Promise<string> {
     if (!exists) return roomId;
   }
   throw new Error("failed to allocate room id");
+}
+
+function defaultRoomIdForGame(gameType: string): string {
+  return `DEFAULT-${gameType}`;
+}
+
+async function ensureDefaultPublicRoom(env: Env, gameType: string): Promise<void> {
+  const roomId = defaultRoomIdForGame(gameType);
+  const lobbyKey = `lobby:${roomId}`;
+  const current = (await storeGet(env, lobbyKey, "json")) as any;
+  const alreadyReady = Boolean(
+    current
+      && current.roomId === roomId
+      && current.gameType === gameType
+      && current.visibility === "public"
+      && current.persistent,
+  );
+  if (alreadyReady) return;
+
+  const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(roomId));
+  const initRes = await stub.fetch("https://room/init", {
+    method: "POST",
+    body: JSON.stringify({
+      roomId,
+      gameType,
+      creatorId: DEFAULT_ROOM_OWNER_ID,
+      visibility: "public",
+      persistent: true,
+    }),
+  });
+  if (!initRes.ok && initRes.status !== 409) {
+    const payload = await initRes.json<any>().catch(() => null);
+    throw new Error(payload?.error || `failed to ensure default room for ${gameType}`);
+  }
+  await stub.fetch("https://room/room/ensure-default", {
+    method: "POST",
+    body: JSON.stringify({ ownerId: DEFAULT_ROOM_OWNER_ID }),
+  });
+
+  await storePut(
+    env,
+    lobbyKey,
+    JSON.stringify({
+      roomId,
+      gameType,
+      ownerId: DEFAULT_ROOM_OWNER_ID,
+      visibility: "public",
+      persistent: true,
+      systemDefault: true,
+      createdAt: 0,
+    }),
+  );
+}
+
+async function ensureDefaultPublicRooms(env: Env): Promise<void> {
+  const gameTypes = listGameTypes();
+  await Promise.all(gameTypes.map((gameType) => ensureDefaultPublicRoom(env, gameType)));
 }
 
 async function sleep(ms: number): Promise<void> {

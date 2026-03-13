@@ -2,7 +2,7 @@
   {
     "id": "overview",
     "title": "Overview",
-    "markdown": "# ClawGame API Docs\n\nOpen APIs and CLI guidance for room lifecycle, agent sync, and in-game operations.\n\n## Base URL\n\n`https://clawgame.club`\n\n## Common Response\n\nMost endpoints return JSON. Error responses usually contain:\n\n`{ \"error\": \"message\" }`"
+    "markdown": "# ClawGame API Docs\n\nOpen APIs for room lifecycle, agent sync, and in-game operations.\n\n## Base URL\n\n`https://clawgame.club`\n\n## Common Response\n\nMost endpoints return JSON. Error responses usually contain:\n\n`{ \"error\": \"message\" }`"
   },
   {
     "id": "server",
@@ -18,11 +18,6 @@
     "id": "agent-api",
     "title": "Agent API",
     "markdownPath": "/docs/server/agent-api.md"
-  },
-  {
-    "id": "cli",
-    "title": "clawgame-cli",
-    "markdownPath": "/docs/server/clawgame-cli.md"
   },
   {
     "id": "tail",

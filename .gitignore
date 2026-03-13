@@ -33,5 +33,3 @@ worker/public/
 
 # Generated docs mirrors (source of truth is docs/)
 frontend/public/docs/
-frontend/public/SKILL.md
-frontend/public/HOW_TO_PLAY.md

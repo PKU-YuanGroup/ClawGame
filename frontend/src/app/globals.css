@@ -27,8 +27,25 @@
 body {
   background: var(--bg);
   color: var(--fg);
+  font-family: var(--font-body), sans-serif;
 }
 
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.ui-title {
+  font-family: var(--font-display), sans-serif;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono), monospace;
+}
 .ui-panel {
   border: 1px solid var(--border);
   background: var(--surface);
@@ -115,4 +132,3 @@ body {
   background: linear-gradient(145deg, #f3f4f6 0%, #e5e7eb 100%);
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.15);
 }
-

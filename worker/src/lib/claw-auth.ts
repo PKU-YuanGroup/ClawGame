@@ -1,5 +1,5 @@
 import type { Env } from "../types";
-import { storeGet, storePut } from "./store";
+import { storeDelete, storeGet, storePut } from "./store";
 
 const BINDING_TOKEN_KEY_PREFIX = "claw-bind-token:";
 const USER_BINDING_TOKEN_KEY_PREFIX = "user-claw-bind-token:";
@@ -72,4 +72,13 @@ export async function resolveUserByCredential(env: Env, credential: string): Pro
   if (!credential) return null;
   const userId = await storeGet(env, `${CREDENTIAL_KEY_PREFIX}${credential}`);
   return userId ? String(userId) : null;
+}
+
+export async function revokeClawCredential(env: Env, userId: string): Promise<void> {
+  if (!userId) return;
+  const credential = await getClawCredential(env, userId);
+  if (credential) {
+    await storeDelete(env, `${CREDENTIAL_KEY_PREFIX}${credential}`);
+  }
+  await storeDelete(env, `${USER_CREDENTIAL_KEY_PREFIX}${userId}`);
 }

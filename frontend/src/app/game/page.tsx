@@ -1,13 +1,45 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { usePageTitle } from "@/hooks/usePageTitle";
 import { useI18n } from "@/lib/i18n";
-import { getGameCover, getGameLabel, getGameTheme, listConfiguredGames } from "@/lib/game-library";
+import { getGameCover, getGameLabel, listConfiguredGames } from "@/lib/game-library";
+import { api } from "@/lib/api";
+
+type LobbyOverviewResponse = {
+  rooms?: unknown[];
+};
 
 export default function Game() {
   usePageTitle("pages.gameTitle");
   const { lang, t } = useI18n();
   const games = listConfiguredGames();
+  const [onlineRoomCounts, setOnlineRoomCounts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchRoomCounts() {
+      const pairs = await Promise.all(games.map(async (gameType) => {
+        try {
+          const data = await api<LobbyOverviewResponse>(`/api/lobby/overview?gameType=${encodeURIComponent(gameType)}`);
+          return [gameType, Array.isArray(data?.rooms) ? data.rooms.length : 0] as const;
+        } catch {
+          return [gameType, 0] as const;
+        }
+      }));
+      if (!cancelled) {
+        setOnlineRoomCounts(Object.fromEntries(pairs));
+      }
+    }
+    void fetchRoomCounts();
+    const timer = window.setInterval(() => {
+      void fetchRoomCounts();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   return (
     <main className="mx-auto max-w-6xl px-3 py-6 sm:px-5 sm:py-8">
@@ -28,8 +60,8 @@ export default function Game() {
       </section>
 
       <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {games.map((gameType, index) => {
-          const theme = getGameTheme(gameType);
+        {games.map((gameType) => {
+          const roomCount = Number(onlineRoomCounts[gameType] || 0);
           return (
             <a
               key={gameType}
@@ -48,28 +80,19 @@ export default function Game() {
                   className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
                 />
                 <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, transparent 10%, rgba(15, 23, 42, 0.22) 52%, rgba(15, 23, 42, 0.86) 100%)" }} />
-                <div className="absolute left-4 top-4 rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.25em]" style={{ background: "rgba(15, 23, 42, 0.46)", color: "rgba(255,255,255,0.9)", backdropFilter: "blur(8px)" }}>
-                  {t("game.liveLobby")}
-                </div>
                 <div className="absolute bottom-4 left-4 right-4">
-                  <div className="text-xs uppercase tracking-[0.28em]" style={{ color: "#fdba74" }}>
-                    {String(index + 1).padStart(2, "0")}
-                  </div>
                   <div
-                    className="mt-2 text-2xl font-semibold"
-                    style={{ color: "white", fontFamily: "Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif" }}
+                    className="text-2xl font-semibold"
+                    style={{ color: "white", fontFamily: "var(--font-display)" }}
                   >
                     {getGameLabel(gameType, lang)}
-                  </div>
-                  <div className="mt-1 text-xs uppercase tracking-[0.2em]" style={{ color: "rgba(255,255,255,0.76)" }}>
-                    {gameType}
                   </div>
                 </div>
               </div>
 
               <div className="flex items-center justify-between px-4 py-4 sm:px-5">
                 <div className="text-sm" style={{ color: "var(--muted)" }}>
-                  {t("game.liveLobby")}
+                  {lang === "zh" ? `${roomCount} 个在线房间` : `${roomCount} rooms online`}
                 </div>
                 <div
                   className="shrink-0 rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em]"

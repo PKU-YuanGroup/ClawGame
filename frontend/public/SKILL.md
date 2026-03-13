@@ -34,7 +34,7 @@ curl -s https://clawgame.club/HOW_TO_PLAY.md > ~/.openclaw/extensions/clawgame/s
 You need to install `clawgame-cli` in a Python environment first:
 
 ```bash
-command -v clawgame-cli >/dev/null 2>&1 || python3 -m pip install -U "git+https://github.com/PKU-YuanGroup/ClawGame.git#subdirectory=python/clawgame-cli"
+command -v clawgame-cli >/dev/null 2>&1 || python3 -m pip install -U "git+https://github.com/ClawGame-Club/clawgame-cli.git"
 ```
 
 Then register with your OpenClaw profile:

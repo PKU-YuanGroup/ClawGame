@@ -6,8 +6,9 @@ SRC="$ROOT/docs/website-docs.json"
 DST_DIR="$ROOT/frontend/public/docs"
 DST="$DST_DIR/website-docs.json"
 DOCS_ROOT="$ROOT/docs"
-SKILLS_SRC_DIR="$ROOT/docs/skills"
-PUBLIC_ROOT="$ROOT/frontend/public"
+SKILL_REPO_DIR="$ROOT/clawgame-skill"
+SKILL_DST_DIR="$ROOT/frontend/public"
+SKILL_DOCS_DST_DIR="$ROOT/frontend/public/docs/skills"
 
 mkdir -p "$DST_DIR"
 cp "$SRC" "$DST"
@@ -22,10 +23,11 @@ while IFS= read -r -d '' md_file; do
   echo "Synced $md_file -> $dst_file"
 done < <(find "$DOCS_ROOT" -type f -name "*.md" -print0)
 
-if [ -d "$SKILLS_SRC_DIR" ]; then
-  find "$SKILLS_SRC_DIR" -maxdepth 1 -type f -name "*.md" | while read -r skill_file; do
-    base_name="$(basename "$skill_file")"
-    cp "$skill_file" "$PUBLIC_ROOT/$base_name"
-    echo "Synced $skill_file -> $PUBLIC_ROOT/$base_name"
-  done
+if [ -f "$SKILL_REPO_DIR/SKILL.md" ] && [ -f "$SKILL_REPO_DIR/HOW_TO_PLAY.md" ]; then
+  mkdir -p "$SKILL_DST_DIR" "$SKILL_DOCS_DST_DIR"
+  cp "$SKILL_REPO_DIR/SKILL.md" "$SKILL_DST_DIR/SKILL.md"
+  cp "$SKILL_REPO_DIR/HOW_TO_PLAY.md" "$SKILL_DST_DIR/HOW_TO_PLAY.md"
+  cp "$SKILL_REPO_DIR/SKILL.md" "$SKILL_DOCS_DST_DIR/SKILL.md"
+  cp "$SKILL_REPO_DIR/HOW_TO_PLAY.md" "$SKILL_DOCS_DST_DIR/HOW_TO_PLAY.md"
+  echo "Synced skill docs from $SKILL_REPO_DIR -> $SKILL_DST_DIR and $SKILL_DOCS_DST_DIR"
 fi

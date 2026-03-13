@@ -1,7 +1,7 @@
 import { getEngine } from "./games/registry";
 import type { MatchPlayer, MatchState, Seat } from "./games/types";
 import type { Env } from "./types";
-import type { ProtocolEnvelope } from "@openclaw/game-protocol";
+import type { ProtocolEnvelope, RoomCommandRequest, RoomCommandResponse } from "@openclaw/game-protocol";
 import { storeDelete } from "./lib/store";
 
 export type RoomVisibility = "public" | "private";
@@ -11,6 +11,7 @@ export interface RoomSnapshot {
   gameType: string;
   visibility: RoomVisibility;
   ownerId?: string;
+  persistent?: boolean;
   players: Omit<MatchPlayer, "token">[];
   state: unknown;
   rematch?: {
@@ -32,6 +33,7 @@ interface RoomData {
   roomId: string;
   gameType: string;
   visibility: RoomVisibility;
+  persistent?: boolean;
   ownerId?: string;
   inviteCode?: string;
   players: MatchPlayer[];
@@ -57,6 +59,7 @@ const EMPTY_ROOM_TTL_MS = 2 * 60 * 1000;
 const AGENT_IDLE_TTL_MS = 3 * 60 * 1000;
 const TURN_TIMEOUT_MS = 30_000;
 const BOT_MOVE_DELAY_MS = 1200;
+const DEFAULT_ROOM_AUTO_RESET_MS = 30_000;
 
 export class GameRoomDO {
   private sockets = new Map<WebSocket, WsMeta>();
@@ -71,10 +74,13 @@ export class GameRoomDO {
     try {
       if (request.method === "POST" && url.pathname === "/init") return await this.init(request);
       if (request.method === "POST" && url.pathname === "/join") return await this.join(request);
+      if (request.method === "POST" && url.pathname === "/command") return await this.command(request);
       if (request.method === "POST" && url.pathname === "/move") return await this.move(request);
       if (request.method === "POST" && url.pathname === "/leave") return await this.leave(request);
       if (request.method === "POST" && url.pathname === "/rematch") return await this.rematch(request);
       if (request.method === "POST" && url.pathname === "/owner/transfer") return await this.transferOwner(request);
+      if (request.method === "POST" && url.pathname === "/room/ensure-default") return await this.ensureDefaultRoom(request);
+      if (request.method === "POST" && url.pathname === "/room/default-reset") return await this.resetDefaultRoomNow();
       if (request.method === "POST" && url.pathname === "/room/reset") return await this.resetRoom(request);
       if (request.method === "POST" && url.pathname === "/room/leave") return await this.leaveRoomByRequester(request);
       if (request.method === "POST" && url.pathname === "/room/join-bot") return await this.joinBotByRequester(request);
@@ -137,15 +143,19 @@ export class GameRoomDO {
   }
 
   async alarm(): Promise<void> {
-    if (this.sockets.size > 0) return;
     const data = await this.load();
     if (!data) return;
+    if (await this.maybeAutoResetDefaultRoomOnAlarm(data)) return;
+    if (this.sockets.size > 0) return;
+    if (data.persistent) return;
     await this.state.storage.delete(ROOM_KEY);
     await storeDelete(this.env, `lobby:${data.roomId}`);
   }
 
   private async cleanupWhenRoomEmpty(): Promise<void> {
     if (this.sockets.size > 0) return;
+    const data = await this.load();
+    if (!data || data.persistent) return;
     await this.scheduleEmptyRoomCleanup();
   }
 
@@ -241,6 +251,7 @@ export class GameRoomDO {
     if (data.players.length < before) {
       if ((data.state as any).status === "playing" && this.humanPlayerCount(data) < 2) {
         (data.state as any).status = "waiting";
+        this.clearFinishedMarkers(data.state as any);
       }
       data.agentLastSeenAt = undefined;
       return true;
@@ -273,6 +284,14 @@ export class GameRoomDO {
     if (gameType === "who_is_undercover") {
       return { seats: 8, phases: ["clue", "vote"], hiddenWords: true };
     }
+    if (gameType === "guandan") {
+      return {
+        seats: ["north", "east", "south", "west"],
+        teams: [["north", "south"], ["east", "west"]],
+        deck: "two_standard_decks_with_jokers",
+        objective: "one_team_finishes_both_players_first",
+      };
+    }
     return {};
   }
 
@@ -285,6 +304,7 @@ export class GameRoomDO {
     if (gameType === "werewolf") return { type: "action", payload: { action: "night_kill|inspect|save|vote|ready", target: "string?" } };
     if (gameType === "junqi") return { type: "move", payload: { from: "string", to: "string" } };
     if (gameType === "who_is_undercover") return { type: "action", payload: { action: "clue|vote", text: "string?", target: "string?" } };
+    if (gameType === "guandan") return { type: "move", payload: { action: "play|pass", cards: "string[]?" } };
     return { type: "move", payload: {} };
   }
 
@@ -296,29 +316,9 @@ export class GameRoomDO {
     }
 
     const data = await this.requireRoom();
-    const engine = getEngine(data.gameType);
-
     try {
-      engine.validateMove(data.state, meta.player.seat, payload.move);
-      data.state = engine.applyMove(data.state, meta.player.seat, payload.move);
-      data.eventSeq = (data.eventSeq || 0) + 1;
-      await this.save(data);
-
-      this.broadcast(data, "action_result", {
-        ok: true,
-        bySeat: meta.player.seat,
-        move: payload.move,
-      });
-      this.broadcast(data, "state_update", this.toSnapshot(data));
-
-      if (data.state.status === "finished") {
-        this.broadcast(data, "game_over", {
-          winner: data.state.winner ?? "draw",
-          moveCount: data.state.moveCount,
-        });
-      } else {
-        this.broadcastTurnPrompt(data);
-      }
+      const result = await this.applyMoveCommand(data, meta.player, payload?.move, payload?.actionId);
+      ws.send(JSON.stringify(this.envelope(data, "action_result", result)));
     } catch (err) {
       ws.send(JSON.stringify(this.envelope(data, "action_result", {
         ok: false,
@@ -339,24 +339,9 @@ export class GameRoomDO {
     }
     const text = String(payload?.text ?? "").trim();
     if (!text) return;
-
-    const senderType: ChatMessage["senderType"] = meta.role === "agent" ? "openclaw" : "user";
-    const senderId = meta.player?.id ?? viewerId ?? "guest";
-
-    data.eventSeq = (data.eventSeq || 0) + 1;
-    const msg: ChatMessage = {
-      id: crypto.randomUUID(),
-      seq: data.eventSeq,
-      senderType,
-      senderId,
-      text: text.slice(0, 400),
-      ts: Date.now(),
-    };
-    if (!Array.isArray(data.chats)) data.chats = [];
-    data.chats.push(msg);
-    data.chats = data.chats.slice(-100);
-    await this.save(data);
-    this.broadcast(data, "chat", msg);
+    const actorType = meta.role === "agent" ? "openclaw" : "player";
+    const actorId = meta.player?.id ?? viewerId ?? "guest";
+    await this.applyChatCommand(data, actorType, actorId, text, payload?.actionId);
   }
 
   private async handleJoinGameWs(ws: WebSocket, payload: any): Promise<void> {
@@ -366,7 +351,7 @@ export class GameRoomDO {
 
     const payloadPlayerId = String(payload?.playerId || "").trim();
     const viewerId = String(meta.viewerId || "").trim();
-    const defaultId = viewerId && !viewerId.startsWith("guest") ? `openclaw:${viewerId}` : viewerId;
+    const defaultId = viewerId;
     const candidateId = payloadPlayerId || meta.player?.id || defaultId;
 
     if (!candidateId || candidateId.startsWith("guest")) {
@@ -425,6 +410,14 @@ export class GameRoomDO {
     }
 
     const ownerId = meta.viewerId;
+    if (String(data.ownerId || "") !== ownerId) {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "join_bot", ok: false, error: "only room owner can add bot" })));
+      return;
+    }
+    if (String((data.state as any)?.status || "") !== "waiting") {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "join_bot", ok: false, error: "can only add bot before game starts" })));
+      return;
+    }
 
     const engine = getEngine(data.gameType);
     if (!engine.chooseBotMove) {
@@ -459,7 +452,7 @@ export class GameRoomDO {
         botId: botUserId,
         seat: joined.seat,
       })));
-      await this.runBotTurns(data);
+      void this.runBotTurns(data);
     } catch (err) {
       ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "join_bot", ok: false, error: (err as Error).message })));
     }
@@ -530,12 +523,13 @@ export class GameRoomDO {
       const readyParticipants = this.readyParticipantCount(data);
       if (readyParticipants < 2) {
         (data.state as any).status = "waiting";
+        this.clearFinishedMarkers(data.state as any);
       }
       if (!data.players.some((p) => p.id.startsWith("openclaw:"))) {
         data.agentLastSeenAt = undefined;
       }
 
-      if (data.players.length === 0) {
+      if (data.players.length === 0 && !data.persistent) {
         // Keep an empty room snapshot for connected spectators; cleanup runs when sockets drain.
         await storeDelete(this.env, `lobby:${data.roomId}`);
       }
@@ -569,8 +563,7 @@ export class GameRoomDO {
     const participantIsReady = (participantId: string): boolean => {
       if (!participantId || participantId.startsWith("openclaw:")) return false;
       if (!playerById.has(participantId)) return false;
-      if (this.isBotUserId(participantId)) return true;
-      return playerById.has(`openclaw:${participantId}`);
+      return true;
     };
 
     for (const p of data.players) {
@@ -664,6 +657,7 @@ export class GameRoomDO {
       creatorId: string;
       visibility?: RoomVisibility;
       inviteCode?: string;
+      persistent?: boolean;
     };
     const existing = await this.load();
     if (existing) return json({ error: "Room already initialized" }, 409);
@@ -674,6 +668,7 @@ export class GameRoomDO {
       roomId: body.roomId,
       gameType: body.gameType,
       visibility: body.visibility ?? "public",
+      persistent: Boolean(body.persistent),
       ownerId: body.creatorId,
       inviteCode: body.inviteCode,
       players: [],
@@ -685,7 +680,9 @@ export class GameRoomDO {
     };
 
     await this.save(data);
-    await this.scheduleEmptyRoomCleanup();
+    if (!data.persistent) {
+      await this.scheduleEmptyRoomCleanup();
+    }
     return json({ ok: true });
   }
 
@@ -727,38 +724,35 @@ export class GameRoomDO {
   }
 
   private readyParticipantCount(data: RoomData): number {
-    const participants = new Set(
-      data.players
-        .filter((p) => !p.id.startsWith("openclaw:"))
-        .map((p) => this.normalizeParticipantId(p.id)),
-    );
+    const participants = new Map<string, { hasUser: boolean; hasOpenclaw: boolean }>();
+    for (const p of data.players) {
+      const participantId = this.normalizeParticipantId(p.id);
+      if (!participantId) continue;
+      const prev = participants.get(participantId) || { hasUser: false, hasOpenclaw: false };
+      if (p.id.startsWith("openclaw:")) prev.hasOpenclaw = true;
+      else prev.hasUser = true;
+      participants.set(participantId, prev);
+    }
 
     let ready = 0;
-    for (const participantId of participants) {
-      const hasUser = data.players.some((p) => p.id === participantId);
-      const hasOpenclaw = data.players.some((p) => p.id === `openclaw:${participantId}`);
-      if (!hasUser || !hasOpenclaw) continue;
-
+    for (const [participantId, sides] of participants.entries()) {
       if (this.isBotUserId(participantId)) {
         ready += 1;
         continue;
       }
-
-      const userSocketOnline = Array.from(this.sockets.values()).some((meta) => {
-        const viewerId = String(meta.viewerId || "");
-        if (viewerId && this.normalizeParticipantId(viewerId) === participantId) return true;
-        if (meta.role === "player" && meta.player?.id) {
-          return this.normalizeParticipantId(meta.player.id) === participantId;
-        }
-        return false;
-      });
-
-      // For agent-vs-agent/debug flows, a participant with bound OpenClaw seat
-      // should be considered ready even without an active browser socket.
-      if (userSocketOnline || hasOpenclaw) ready += 1;
+      if (sides.hasUser || sides.hasOpenclaw) ready += 1;
     }
-
     return ready;
+  }
+
+  private hasOpenclawOrBotParticipant(data: RoomData): boolean {
+    for (const p of data.players) {
+      const participantId = this.normalizeParticipantId(p.id);
+      if (!participantId) continue;
+      if (this.isBotUserId(participantId)) return true;
+      if (p.id.startsWith("openclaw:")) return true;
+    }
+    return false;
   }
 
   private addSystemChat(data: RoomData, text: string): ChatMessage | null {
@@ -818,7 +812,45 @@ export class GameRoomDO {
     clock.turnStartedAt = Date.now();
   }
 
-  private applyTurnTimeout(data: RoomData): boolean {
+  private moveAllPlayersToSpectators(data: RoomData): void {
+    const state: any = data.state as any;
+    if (data.players.length > 0) {
+      state.settlementPlayers = data.players.map((p) => ({ id: p.id, seat: p.seat }));
+    }
+    if (data.players.length > 0) {
+      data.players = [];
+    }
+    data.agentLastSeenAt = undefined;
+    if (!data.rematch) data.rematch = { votes: {}, closed: false };
+    data.rematch.votes = {};
+
+    for (const [socket, socketMeta] of this.sockets.entries()) {
+      socketMeta.player = undefined;
+      socketMeta.role = "spectator";
+      this.sockets.set(socket, socketMeta);
+    }
+  }
+
+  private clearFinishedMarkers(state: any): void {
+    if (!state || typeof state !== "object") return;
+    delete state.winner;
+    delete state.finishReason;
+    delete state.autoResetAt;
+  }
+
+  private resetIfWaitingAndEmpty(data: RoomData): void {
+    const state: any = data.state as any;
+    if (String(state?.status || "") !== "waiting") return;
+    if (Array.isArray(data.players) && data.players.length > 0) return;
+    // Empty waiting rooms should not retain stale settlement markers.
+    const hasStaleResult = typeof state?.winner !== "undefined" || typeof state?.finishReason !== "undefined" || Number(state?.moveCount || 0) > 0;
+    if (!hasStaleResult) return;
+    const engine = getEngine(data.gameType);
+    data.state = engine.initState();
+    this.clearDefaultRoomAutoReset(data);
+  }
+
+  private async applyTurnTimeout(data: RoomData): Promise<boolean> {
     const state: any = data.state as any;
     if (state.status !== "playing") return false;
 
@@ -838,6 +870,7 @@ export class GameRoomDO {
     state.status = "finished";
     state.winner = this.getOpponentSeat(data, currentSeat) || "draw";
     state.finishReason = "timeout";
+    this.markDefaultRoomAutoReset(data);
     data.rematch = { votes: {}, closed: false };
     const systemMsg = this.addSystemChat(data, `${currentSeat} timed out. ${state.winner} wins.`);
     if (systemMsg) this.broadcast(data, "chat", systemMsg);
@@ -846,19 +879,23 @@ export class GameRoomDO {
       reason: "timeout",
       moveCount: Number(state.moveCount || 0),
     });
+    this.moveAllPlayersToSpectators(data);
     return true;
   }
 
   private async tickTimeoutByHeartbeat(): Promise<void> {
     const data = await this.load();
     if (!data) return;
-    const changed = this.applyTurnTimeout(data);
+    const changed = await this.applyTurnTimeout(data);
     if (!changed) return;
     await this.save(data);
+    await this.maybeScheduleDefaultAutoReset(data);
     this.broadcast(data, "state_update", this.toSnapshot(data));
+    this.broadcast(data, "online_update", this.currentOnline(data));
   }
 
   private async joinByPlayerId(data: RoomData, playerId: string, inviteCode?: string): Promise<{ playerToken: string; seat: Seat }> {
+    this.resetIfWaitingAndEmpty(data);
     if (data.visibility === "private" && data.inviteCode && data.inviteCode !== inviteCode) {
       throw new Error("Invalid invite code");
     }
@@ -885,11 +922,17 @@ export class GameRoomDO {
     const token = crypto.randomUUID();
     data.players.push({ id: playerId, seat, token });
     if (playerId.startsWith("openclaw:")) data.agentLastSeenAt = Date.now();
-    this.bindViewerParticipantIfPresent(data, playerId, seat);
 
     const readyParticipants = this.readyParticipantCount(data);
-    if (readyParticipants >= this.gameMinParticipants(data.gameType) && data.state.status === "waiting") {
+    const hasRequiredNonHuman = this.hasOpenclawOrBotParticipant(data);
+    if (
+      readyParticipants >= this.gameMinParticipants(data.gameType)
+      && hasRequiredNonHuman
+      && data.state.status === "waiting"
+    ) {
       data.state.status = "playing";
+      delete (data.state as any).settlementPlayers;
+      this.clearDefaultRoomAutoReset(data);
       const clock = this.ensureClockState(data);
       clock.turnStartedAt = Date.now();
       const systemMsg = this.addSystemChat(data, "Game started. Public chat window opened for OpenClaw banter.");
@@ -900,33 +943,9 @@ export class GameRoomDO {
     this.broadcast(data, "state_update", this.toSnapshot(data));
     this.broadcast(data, "online_update", this.currentOnline(data));
     if ((data.state as any).status === "playing") {
-      await this.runBotTurns(data);
+      void this.runBotTurns(data);
     }
     return { playerToken: token, seat };
-  }
-
-  private bindViewerParticipantIfPresent(data: RoomData, playerId: string, seat: Seat): void {
-    if (!playerId.startsWith("openclaw:")) return;
-
-    const participantId = this.normalizeParticipantId(playerId);
-    if (!participantId || participantId.startsWith("bot:")) return;
-
-    const matchingSockets = Array.from(this.sockets.entries()).filter(([, meta]) => String(meta.viewerId || "") === participantId);
-    if (matchingSockets.length === 0) return;
-
-    const hasHumanPlayer = data.players.some((p) => p.id === participantId);
-    if (!hasHumanPlayer) {
-      data.players.push({ id: participantId, seat, token: crypto.randomUUID() });
-    }
-
-    for (const [socket, meta] of matchingSockets) {
-      meta.role = "player";
-      if (!meta.player || meta.player.id !== participantId) {
-        const player = data.players.find((p) => p.id === participantId);
-        if (player) meta.player = player;
-      }
-      this.sockets.set(socket, meta);
-    }
   }
 
   private async removeParticipantById(data: RoomData, participantPlayerId: string): Promise<boolean> {
@@ -947,8 +966,10 @@ export class GameRoomDO {
     }
 
     const readyParticipants = this.readyParticipantCount(data);
-    if (readyParticipants < this.gameMinParticipants(data.gameType)) {
+    const hasRequiredNonHuman = this.hasOpenclawOrBotParticipant(data);
+    if (readyParticipants < this.gameMinParticipants(data.gameType) || !hasRequiredNonHuman) {
       (data.state as any).status = "waiting";
+      this.clearFinishedMarkers(data.state as any);
     }
     if (!data.players.some((p) => p.id.startsWith("openclaw:"))) {
       data.agentLastSeenAt = undefined;
@@ -959,7 +980,7 @@ export class GameRoomDO {
       data.ownerId = nextOwner?.id;
     }
 
-    if (data.players.length === 0) {
+    if (data.players.length === 0 && !data.persistent) {
       // Keep an empty room snapshot for connected spectators; cleanup runs when sockets drain.
       await storeDelete(this.env, `lobby:${data.roomId}`);
     }
@@ -1000,9 +1021,11 @@ export class GameRoomDO {
         return;
       }
 
-      if (this.applyTurnTimeout(data)) {
+      if (await this.applyTurnTimeout(data)) {
         this.broadcast(data, "state_update", this.toSnapshot(data));
+        this.broadcast(data, "online_update", this.currentOnline(data));
         await this.save(data);
+        await this.maybeScheduleDefaultAutoReset(data);
         return;
       }
 
@@ -1015,9 +1038,11 @@ export class GameRoomDO {
 
       await new Promise((resolve) => setTimeout(resolve, BOT_MOVE_DELAY_MS));
 
-      if (this.applyTurnTimeout(data)) {
+      if (await this.applyTurnTimeout(data)) {
         this.broadcast(data, "state_update", this.toSnapshot(data));
+        this.broadcast(data, "online_update", this.currentOnline(data));
         await this.save(data);
+        await this.maybeScheduleDefaultAutoReset(data);
         return;
       }
 
@@ -1026,6 +1051,7 @@ export class GameRoomDO {
         (data.state as any).status = "finished";
         (data.state as any).winner = this.getOpponentSeat(data, bot.seat) || "draw";
         (data.state as any).finishReason = "no_legal_move";
+        this.markDefaultRoomAutoReset(data);
         data.rematch = { votes: {}, closed: false };
         const systemMsg = this.addSystemChat(data, "Game over. Bot has no legal move.");
         if (systemMsg) this.broadcast(data, "chat", systemMsg);
@@ -1034,8 +1060,11 @@ export class GameRoomDO {
           reason: "no_legal_move",
           moveCount: (data.state as any).moveCount,
         });
+        this.moveAllPlayersToSpectators(data);
         this.broadcast(data, "state_update", this.toSnapshot(data));
+        this.broadcast(data, "online_update", this.currentOnline(data));
         await this.save(data);
+        await this.maybeScheduleDefaultAutoReset(data);
         return;
       }
 
@@ -1045,6 +1074,7 @@ export class GameRoomDO {
         (data.state as any).status = "finished";
         (data.state as any).winner = this.getOpponentSeat(data, bot.seat) || "draw";
         (data.state as any).finishReason = "illegal_bot_move";
+        this.markDefaultRoomAutoReset(data);
         data.rematch = { votes: {}, closed: false };
         const systemMsg = this.addSystemChat(data, "Game over. Bot produced illegal move.");
         if (systemMsg) this.broadcast(data, "chat", systemMsg);
@@ -1053,14 +1083,29 @@ export class GameRoomDO {
           reason: "illegal_bot_move",
           moveCount: (data.state as any).moveCount,
         });
+        this.moveAllPlayersToSpectators(data);
         this.broadcast(data, "state_update", this.toSnapshot(data));
+        this.broadcast(data, "online_update", this.currentOnline(data));
         await this.save(data);
+        await this.maybeScheduleDefaultAutoReset(data);
         return;
       }
 
       data.state = engine.applyMove(data.state, bot.seat, move);
       this.resetTurnClockForNext(data);
       data.eventSeq = (data.eventSeq || 0) + 1;
+
+      if ((data.state as any).status === "finished") {
+        this.markDefaultRoomAutoReset(data);
+        data.rematch = { votes: {}, closed: false };
+        const systemMsg = this.addSystemChat(data, "Game over. Rematch voting is now open.");
+        if (systemMsg) this.broadcast(data, "chat", systemMsg);
+        this.broadcast(data, "game_over", {
+          winner: (data.state as any).winner ?? "draw",
+          moveCount: (data.state as any).moveCount,
+        });
+        this.moveAllPlayersToSpectators(data);
+      }
 
       this.broadcast(data, "action_result", {
         ok: true,
@@ -1069,18 +1114,10 @@ export class GameRoomDO {
         move,
       });
       this.broadcast(data, "state_update", this.toSnapshot(data));
-
-      if ((data.state as any).status === "finished") {
-        data.rematch = { votes: {}, closed: false };
-        const systemMsg = this.addSystemChat(data, "Game over. Rematch voting is now open.");
-        if (systemMsg) this.broadcast(data, "chat", systemMsg);
-        this.broadcast(data, "game_over", {
-          winner: (data.state as any).winner ?? "draw",
-          moveCount: (data.state as any).moveCount,
-        });
-      }
+      this.broadcast(data, "online_update", this.currentOnline(data));
 
       await this.save(data);
+      await this.maybeScheduleDefaultAutoReset(data);
       if ((data.state as any).status === "playing") {
         setTimeout(() => {
           void this.runBotTurns(data);
@@ -1093,9 +1130,14 @@ export class GameRoomDO {
 
   private async join(request: Request): Promise<Response> {
     const body = (await request.json()) as { playerId: string; inviteCode?: string };
-    const data = await this.requireRoom();
-    const joined = await this.joinByPlayerId(data, body.playerId, body.inviteCode);
-    return json(joined);
+    const legacyCommand: RoomCommandRequest = {
+      protocolVersion: "v1",
+      roomId: "",
+      actorType: body.playerId?.startsWith("openclaw:") ? "openclaw" : "player",
+      actorId: String(body.playerId || ""),
+      command: { kind: "join", inviteCode: body.inviteCode },
+    };
+    return await this.commandFromPayload(legacyCommand);
   }
 
   private async leave(request: Request): Promise<Response> {
@@ -1128,9 +1170,12 @@ export class GameRoomDO {
       new Set(data.players.filter((p) => !p.id.startsWith("openclaw:") && !this.isBotUserId(p.id)).map((p) => p.id)),
     );
     const everyoneAccepted = humanParticipants.length >= 2 && humanParticipants.every((id) => data.rematch?.votes?.[id] === true);
-    if (everyoneAccepted) {
+    const compositionSatisfied = this.hasOpenclawOrBotParticipant(data);
+    const canRestart = everyoneAccepted && compositionSatisfied;
+    if (canRestart) {
       const engine = getEngine(data.gameType);
       data.state = engine.initState();
+      this.clearDefaultRoomAutoReset(data);
       this.resetTurnClockForNext(data);
       data.rematch = { votes: {}, closed: false };
       const systemMsg = this.addSystemChat(data, "Rematch started. Public chat window opened.");
@@ -1141,11 +1186,16 @@ export class GameRoomDO {
     await this.save(data);
     this.broadcast(data, "state_update", this.toSnapshot(data));
     this.broadcast(data, "online_update", this.currentOnline(data));
-    if (everyoneAccepted) {
+    if (canRestart) {
       await this.runBotTurns(data);
     }
 
-    return json({ ok: true, rematch: data.rematch, restarted: everyoneAccepted });
+    return json({
+      ok: true,
+      rematch: data.rematch,
+      restarted: canRestart,
+      reason: everyoneAccepted && !compositionSatisfied ? "at_least_one_openclaw_or_bot_required" : undefined,
+    });
   }
 
   private async transferOwner(request: Request): Promise<Response> {
@@ -1164,14 +1214,34 @@ export class GameRoomDO {
     return json({ ok: true, ownerId: data.ownerId });
   }
 
-  private async resetRoom(request: Request): Promise<Response> {
-    const body = (await request.json()) as { requesterId: string };
-    const data = await this.requireRoom();
-    if (!body.requesterId) throw new Error("requesterId is required");
-    if (data.ownerId !== body.requesterId) throw new Error("only owner can reset room");
+  private markDefaultRoomAutoReset(data: RoomData): void {
+    if (!data.persistent) return;
+    const state: any = data.state as any;
+    if (String(state?.status || "") !== "finished") return;
+    const existed = Number(state?.autoResetAt || 0);
+    if (existed > Date.now()) return;
+    state.autoResetAt = Date.now() + DEFAULT_ROOM_AUTO_RESET_MS;
+  }
 
+  private clearDefaultRoomAutoReset(data: RoomData): void {
+    const state: any = data.state as any;
+    if (!state || typeof state !== "object") return;
+    delete state.autoResetAt;
+  }
+
+  private async maybeScheduleDefaultAutoReset(data: RoomData): Promise<void> {
+    if (!data.persistent) return;
+    const state: any = data.state as any;
+    const autoResetAt = Number(state?.autoResetAt || 0);
+    if (autoResetAt > Date.now()) {
+      await this.state.storage.setAlarm(autoResetAt);
+    }
+  }
+
+  private async performRoomReset(data: RoomData, systemText: string): Promise<void> {
     const engine = getEngine(data.gameType);
     data.state = engine.initState();
+    this.clearDefaultRoomAutoReset(data);
     data.players = [];
     data.rematch = { votes: {}, closed: false };
 
@@ -1181,11 +1251,59 @@ export class GameRoomDO {
       this.sockets.set(ws, meta);
     }
 
-    const msg = this.addSystemChat(data, "Room has been reset by owner.");
+    const msg = this.addSystemChat(data, systemText);
     if (msg) this.broadcast(data, "chat", msg);
     await this.save(data);
     this.broadcast(data, "state_update", this.toSnapshot(data));
     this.broadcast(data, "online_update", this.currentOnline(data));
+  }
+
+  private async maybeAutoResetDefaultRoomOnAlarm(data: RoomData): Promise<boolean> {
+    if (!data.persistent) return false;
+    const state: any = data.state as any;
+    const autoResetAt = Number(state?.autoResetAt || 0);
+    if (!autoResetAt || String(state?.status || "") !== "finished") return false;
+    if (Date.now() < autoResetAt) {
+      await this.state.storage.setAlarm(autoResetAt);
+      return false;
+    }
+    await this.performRoomReset(data, "Default room auto-reset after settlement.");
+    return true;
+  }
+
+  private async resetRoom(request: Request): Promise<Response> {
+    const body = (await request.json()) as { requesterId: string };
+    const data = await this.requireRoom();
+    if (!body.requesterId) throw new Error("requesterId is required");
+    if (data.ownerId !== body.requesterId) throw new Error("only owner can reset room");
+    if (data.persistent) throw new Error("default room resets automatically after settlement");
+    await this.performRoomReset(data, "Room has been reset by owner.");
+    return json({ ok: true, snapshot: this.toSnapshot(data) });
+  }
+
+  private async ensureDefaultRoom(request: Request): Promise<Response> {
+    const body = (await request.json().catch(() => ({}))) as { ownerId?: string };
+    const data = await this.requireRoom();
+    if (!String(data.roomId || "").startsWith("DEFAULT-")) throw new Error("only default rooms can be ensured");
+    data.persistent = true;
+    data.visibility = "public";
+    data.ownerId = String(body.ownerId || data.ownerId || "clawgame");
+    this.resetIfWaitingAndEmpty(data);
+    const status = String((data.state as any)?.status || "");
+    if (status === "finished") this.markDefaultRoomAutoReset(data);
+    else this.clearDefaultRoomAutoReset(data);
+    await this.save(data);
+    await this.maybeScheduleDefaultAutoReset(data);
+    return json({ ok: true, snapshot: this.toSnapshot(data) });
+  }
+
+  private async resetDefaultRoomNow(): Promise<Response> {
+    const data = await this.requireRoom();
+    if (!String(data.roomId || "").startsWith("DEFAULT-")) throw new Error("only default rooms can be reset via this endpoint");
+    data.persistent = true;
+    data.visibility = "public";
+    data.ownerId = String(data.ownerId || "clawgame");
+    await this.performRoomReset(data, "Default room has been reset.");
     return json({ ok: true, snapshot: this.toSnapshot(data) });
   }
 
@@ -1226,31 +1344,153 @@ export class GameRoomDO {
 
   private async move(request: Request): Promise<Response> {
     const body = (await request.json()) as { playerToken: string; move: any };
-    const data = await this.requireRoom();
+    const legacyCommand: RoomCommandRequest = {
+      protocolVersion: "v1",
+      roomId: "",
+      actorType: "player",
+      playerToken: body.playerToken,
+      command: { kind: "move", move: body.move },
+    };
+    return await this.commandFromPayload(legacyCommand);
+  }
 
-    const player = data.players.find((p) => p.token === body.playerToken);
-    if (!player) throw new Error("Invalid token");
-
-    if (this.applyTurnTimeout(data)) {
+  private async applyMoveCommand(data: RoomData, player: MatchPlayer, move: unknown, actionId?: string): Promise<RoomCommandResponse> {
+    if (await this.applyTurnTimeout(data)) {
       await this.save(data);
+      await this.maybeScheduleDefaultAutoReset(data);
       this.broadcast(data, "state_update", this.toSnapshot(data));
-      return json({ ...this.toSnapshot(data), seq: data.eventSeq || 0 });
+      this.broadcast(data, "online_update", this.currentOnline(data));
+      return {
+        protocolVersion: "v1",
+        roomId: data.roomId,
+        ok: true,
+        seq: data.eventSeq || 0,
+        actionId: actionId ? String(actionId) : undefined,
+        state: this.toSnapshot(data),
+      };
     }
 
     const engine = getEngine(data.gameType);
-    engine.validateMove(data.state, player.seat, body.move);
-    data.state = engine.applyMove(data.state, player.seat, body.move);
+    engine.validateMove(data.state, player.seat, move);
+    data.state = engine.applyMove(data.state, player.seat, move);
     this.resetTurnClockForNext(data);
     data.eventSeq = (data.eventSeq || 0) + 1;
     if ((data.state as any).status === "finished") {
+      this.markDefaultRoomAutoReset(data);
       data.rematch = { votes: {}, closed: false };
       const systemMsg = this.addSystemChat(data, "Game over. Rematch voting is now open.");
       if (systemMsg) this.broadcast(data, "chat", systemMsg);
+      this.broadcast(data, "game_over", {
+        winner: (data.state as any).winner ?? "draw",
+        moveCount: (data.state as any).moveCount,
+      });
+      this.moveAllPlayersToSpectators(data);
+    } else {
+      this.broadcastTurnPrompt(data);
     }
 
+    this.broadcast(data, "action_result", {
+      ok: true,
+      actor: player.id,
+      bySeat: player.seat,
+      seat: player.seat,
+      move,
+      actionId: actionId ? String(actionId) : undefined,
+    });
+    this.broadcast(data, "state_update", this.toSnapshot(data));
+    this.broadcast(data, "online_update", this.currentOnline(data));
+
     await this.save(data);
+    await this.maybeScheduleDefaultAutoReset(data);
     await this.runBotTurns(data);
-    return json({ ...this.toSnapshot(data), seq: data.eventSeq || 0 });
+    return {
+      protocolVersion: "v1",
+      roomId: data.roomId,
+      ok: true,
+      seq: data.eventSeq || 0,
+      actionId: actionId ? String(actionId) : undefined,
+      state: this.toSnapshot(data),
+    };
+  }
+
+  private async applyChatCommand(
+    data: RoomData,
+    actorType: "player" | "openclaw" | "system",
+    actorId: string,
+    text: string,
+    actionId?: string,
+  ): Promise<RoomCommandResponse> {
+    const normalized = String(text || "").trim();
+    if (!normalized) throw new Error("empty chat text");
+    data.eventSeq = (data.eventSeq || 0) + 1;
+    const msg: ChatMessage = {
+      id: crypto.randomUUID(),
+      seq: data.eventSeq,
+      senderType: actorType === "openclaw" ? "openclaw" : actorType === "system" ? "system" : "user",
+      senderId: String(actorId || "anonymous"),
+      text: normalized.slice(0, 400),
+      ts: Date.now(),
+    };
+    if (!Array.isArray(data.chats)) data.chats = [];
+    data.chats.push(msg);
+    data.chats = data.chats.slice(-100);
+    await this.save(data);
+    this.broadcast(data, "chat", msg);
+    return {
+      protocolVersion: "v1",
+      roomId: data.roomId,
+      ok: true,
+      seq: data.eventSeq || 0,
+      actionId: actionId ? String(actionId) : undefined,
+    };
+  }
+
+  private async commandFromPayload(payload: RoomCommandRequest): Promise<Response> {
+    const data = await this.requireRoom();
+    const kind = String(payload?.command?.kind || "");
+
+    if (kind === "join") {
+      const actorId = String(payload?.actorId || "").trim();
+      if (!actorId) throw new Error("actorId is required");
+      const joined = await this.joinByPlayerId(data, actorId, payload?.command?.inviteCode);
+      const res: RoomCommandResponse = {
+        protocolVersion: "v1",
+        roomId: data.roomId,
+        ok: true,
+        seq: data.eventSeq || 0,
+        actionId: payload?.actionId ? String(payload.actionId) : undefined,
+        data: { playerToken: joined.playerToken, seat: joined.seat, playerId: actorId },
+        state: this.toSnapshot(data),
+      };
+      return json(res);
+    }
+
+    if (kind === "move") {
+      const playerToken = String(payload?.playerToken || "").trim();
+      if (!playerToken) throw new Error("playerToken is required");
+      const player = data.players.find((p) => p.token === playerToken);
+      if (!player) throw new Error("Invalid token");
+      const result = await this.applyMoveCommand(data, player, payload?.command?.move, payload?.actionId);
+      return json(result);
+    }
+
+    if (kind === "chat") {
+      const res = await this.applyChatCommand(
+        data,
+        payload.actorType || "player",
+        String(payload.actorId || "anonymous"),
+        String(payload?.command?.text || ""),
+        payload?.actionId ? String(payload.actionId) : undefined,
+      );
+      return json(res);
+    }
+
+    throw new Error("unsupported command kind");
+  }
+
+  private async command(request: Request): Promise<Response> {
+    const payload = (await request.json()) as RoomCommandRequest;
+    return await this.commandFromPayload(payload);
   }
 
   private async stateView(): Promise<Response> {
@@ -1272,24 +1512,14 @@ export class GameRoomDO {
 
   private async chatSend(request: Request): Promise<Response> {
     const body = (await request.json()) as { senderType?: "user" | "openclaw" | "spectator"; senderId?: string; text: string };
-    const data = await this.requireRoom();
-    const text = (body.text || "").trim();
-    if (!text) throw new Error("empty chat text");
-    data.eventSeq = (data.eventSeq || 0) + 1;
-    const msg: ChatMessage = {
-      id: crypto.randomUUID(),
-      seq: data.eventSeq,
-      senderType: body.senderType || ("user" as const),
-      senderId: body.senderId || "anonymous",
-      text: text.slice(0, 400),
-      ts: Date.now(),
+    const legacyCommand: RoomCommandRequest = {
+      protocolVersion: "v1",
+      roomId: "",
+      actorType: body.senderType === "openclaw" ? "openclaw" : "player",
+      actorId: String(body.senderId || "anonymous"),
+      command: { kind: "chat", text: String(body.text || "") },
     };
-    if (!Array.isArray(data.chats)) data.chats = [];
-    data.chats.push(msg);
-    data.chats = data.chats.slice(-100);
-    await this.save(data);
-    this.broadcast(data, "chat", msg);
-    return json({ ok: true, message: msg });
+    return await this.commandFromPayload(legacyCommand);
   }
 
   private async requireRoom(): Promise<RoomData> {
@@ -1312,13 +1542,21 @@ export class GameRoomDO {
 
   private toSnapshot(data: RoomData): RoomSnapshot {
     const engine = getEngine(data.gameType);
+    const rawState: any = data.state as any;
+    const stateSnapshot: any = engine.snapshot(data.state);
+    if (stateSnapshot && typeof stateSnapshot === "object") {
+      if (typeof rawState?.autoResetAt === "number" && rawState.autoResetAt > 0) {
+        stateSnapshot.autoResetAt = rawState.autoResetAt;
+      }
+    }
     return {
       roomId: data.roomId,
       gameType: data.gameType,
       visibility: data.visibility,
       ownerId: data.ownerId,
+      persistent: Boolean(data.persistent),
       players: data.players.map(({ token, ...rest }) => rest),
-      state: engine.snapshot(data.state),
+      state: stateSnapshot,
       rematch: data.rematch || { votes: {}, closed: false },
     };
   }

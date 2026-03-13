@@ -1,5 +1,25 @@
 import "./globals.css";
 import { TopNav } from "@/components/TopNav";
+import { Bricolage_Grotesque, IBM_Plex_Mono, Manrope } from "next/font/google";
+
+const manrope = Manrope({
+  subsets: ["latin"],
+  variable: "--font-body",
+  display: "swap",
+});
+
+const bricolageGrotesque = Bricolage_Grotesque({
+  subsets: ["latin"],
+  variable: "--font-display",
+  display: "swap",
+});
+
+const ibmPlexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  weight: ["400", "500", "600"],
+  display: "swap",
+});
 
 const initThemeScript = `
 (function(){
@@ -20,7 +40,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script dangerouslySetInnerHTML={{ __html: initThemeScript }} />
       </head>
-      <body className="flex min-h-screen flex-col" style={{ background: "var(--surface)" }}>
+      <body
+        className={`${manrope.variable} ${bricolageGrotesque.variable} ${ibmPlexMono.variable} flex min-h-screen flex-col`}
+        style={{ background: "var(--surface)" }}
+      >
         <TopNav />
         <div className="min-h-[calc(100vh-60px)] flex-1">{children}</div>
         <footer className="border-t px-3 py-8 text-xs sm:px-5" style={{ borderColor: "var(--border)", color: "var(--muted)", background: "var(--surface)", paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}>

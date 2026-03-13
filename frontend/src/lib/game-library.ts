@@ -43,6 +43,7 @@ export function getGameCover(gameType: string): string {
   if (gameType === "werewolf") return svgCover("Werewolf", "FULL MOON", ["#0b1021", "#2b1848", "#7088c8"], "☾");
   if (gameType === "junqi") return svgCover("Junqi", "TACTICAL FRONT", ["#23150e", "#4b2e16", "#a56a2d"], "♜");
   if (gameType === "who_is_undercover") return svgCover("Undercover", "HIDDEN WORD", ["#1d0d33", "#9d174d", "#f97316"], "◈");
+  if (gameType === "guandan") return svgCover("Guandan", "DOUBLE DECK", ["#271008", "#7a2d10", "#e2a647"], "🂡");
   return protocolGetGameCover(gameType);
 }
 
@@ -112,6 +113,15 @@ export function getGameTheme(gameType: string): GameTheme {
       accent: "#f0d6a8",
       ink: "#fff6e7",
       atmosphere: "Quiet cedar board, meditative space, strategic stillness",
+    };
+  }
+  if (gameType === "guandan") {
+    return {
+      cardBackground: "linear-gradient(135deg, #2a1309 0%, #8d3718 52%, #f0b85c 100%)",
+      roomBackground: "linear-gradient(180deg, #1c0d07 0%, #4a1f10 52%, #1c0d07 100%)",
+      accent: "#f0b85c",
+      ink: "#fff2de",
+      atmosphere: "Heated card table, partner tempo, explosive bombs",
     };
   }
   return {

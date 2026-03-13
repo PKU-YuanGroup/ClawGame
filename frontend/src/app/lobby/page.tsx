@@ -148,7 +148,7 @@ export default function Lobby() {
                 </div>
                 <h1
                   className="mt-3 text-3xl font-semibold sm:text-5xl"
-                  style={{ color: theme.ink, fontFamily: "Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif" }}
+                  style={{ color: theme.ink, fontFamily: "var(--font-display)" }}
                 >
                   {getGameLabel(gameType, lang)}
                 </h1>
@@ -221,7 +221,7 @@ export default function Lobby() {
               </div>
               <h2
                 className="mt-2 text-2xl font-semibold"
-                style={{ fontFamily: "Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif" }}
+                style={{ fontFamily: "var(--font-display)" }}
               >
                 {getGameLabel(gameType, lang)}
               </h2>
@@ -306,7 +306,7 @@ export default function Lobby() {
             </div>
             <h2
               className="mt-2 text-2xl font-semibold sm:text-3xl"
-              style={{ fontFamily: "Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif" }}
+              style={{ fontFamily: "var(--font-display)" }}
             >
               {getGameLabel(gameType, lang)}
             </h2>
@@ -317,7 +317,7 @@ export default function Lobby() {
         </div>
 
         {rooms.length ? (
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
             {rooms.map((room) => {
               const roster = room.onlinePlayers;
               return (
@@ -331,7 +331,7 @@ export default function Lobby() {
                     boxShadow: "0 3px 10px rgba(15, 23, 42, 0.06)",
                   }}
                 >
-                <div className="border-b px-4 py-3 sm:px-5" style={{ borderColor: "var(--border)" }}>
+                <div className="px-4 py-3 sm:px-5">
                   <div className="flex items-center justify-end gap-3">
                     <div
                       className="rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]"
@@ -359,8 +359,8 @@ export default function Lobby() {
                             alt={player.displayName}
                             className="mx-auto h-11 w-11 rounded-full border object-cover"
                             style={{
-                              borderColor: player.type === "openclaw" ? "#f97316" : "var(--border)",
-                              boxShadow: player.type === "openclaw" ? "0 0 0 2px rgba(249,115,22,0.15)" : "none",
+                              borderColor: "var(--border)",
+                              boxShadow: "none",
                             }}
                           />
                           <div className="mt-1 truncate text-[11px] font-medium">
@@ -368,14 +368,14 @@ export default function Lobby() {
                           </div>
                         </div>
                       )) : (
-                        <div className="rounded-xl border px-4 py-5 text-sm" style={{ borderColor: "var(--border)", background: "var(--surface-2)", color: "var(--muted)" }}>
+                        <div className="px-1 py-4 text-sm" style={{ color: "var(--muted)" }}>
                           {t("lobby.noOnlinePlayers")}
                         </div>
                       )}
                     </div>
                   </div>
 
-                  <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3" style={{ borderColor: "var(--border)" }}>
+                  <div className="mt-3 flex items-center justify-between gap-3 pt-3">
                     <div className="flex min-w-0 items-center gap-2.5">
                       <img
                         src={room.owner.avatarUrl || DEFAULT_AVATAR}
@@ -411,34 +411,48 @@ export default function Lobby() {
       </section>
 
       {showBindGuard ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" onClick={() => setShowBindGuard(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px]" onClick={() => setShowBindGuard(false)}>
           <div
-            className="w-full max-w-md rounded-2xl border p-5"
-            style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 96%, transparent)" }}
+            className="w-full max-w-lg overflow-hidden rounded-3xl border"
+            style={{
+              borderColor: "color-mix(in oklab, var(--border) 88%, #fb923c)",
+              background: "linear-gradient(160deg, color-mix(in oklab, var(--surface) 96%, white) 0%, color-mix(in oklab, var(--surface-2) 94%, transparent) 100%)",
+              boxShadow: "0 18px 45px rgba(2, 6, 23, 0.28)",
+            }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="text-base font-semibold" style={{ color: "var(--fg)" }}>
-              {t("bindGuard.title")}
+            <div className="border-b px-5 py-4 sm:px-6" style={{ borderColor: "color-mix(in oklab, var(--border) 80%, transparent)" }}>
+              <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl" style={{ background: "color-mix(in oklab, #fb923c 20%, transparent)", color: "#ea580c" }}>
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" aria-hidden="true">
+                  <path d="M12 3.5 4 7.5V12c0 5.2 3.4 8.8 8 10 4.6-1.2 8-4.8 8-10V7.5l-8-4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M9.5 12.5 11 14l3.5-3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+              <div className="mt-3 text-lg font-semibold leading-6" style={{ color: "var(--fg)" }}>
+                {t("bindGuard.title")}
+              </div>
             </div>
-            <div className="mt-2 text-sm" style={{ color: "var(--muted)" }}>
-              {t("bindGuard.desc")}
-            </div>
-            <div className="mt-4 flex gap-2">
-              <a
-                href="/"
-                className="inline-flex rounded-full px-4 py-2 text-sm font-semibold"
-                style={{ background: "var(--accent)", color: "#fff" }}
-              >
-                {t("bindGuard.backHome")}
-              </a>
-              <button
-                type="button"
-                className="inline-flex rounded-full border px-4 py-2 text-sm"
-                style={{ borderColor: "var(--border)", color: "var(--fg)" }}
-                onClick={() => setShowBindGuard(false)}
-              >
-                {t("bindGuard.skip")}
-              </button>
+            <div className="px-5 pb-5 pt-4 sm:px-6 sm:pb-6">
+              <div className="text-sm leading-6" style={{ color: "var(--muted)" }}>
+                {t("bindGuard.desc")}
+              </div>
+              <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+                <a
+                  href="/"
+                  className="inline-flex flex-1 items-center justify-center rounded-xl px-4 py-2.5 text-sm font-semibold"
+                  style={{ background: "linear-gradient(135deg, #fb923c, #ea580c)", color: "#fff" }}
+                >
+                  {t("bindGuard.backHome")}
+                </a>
+                <button
+                  type="button"
+                  className="inline-flex flex-1 items-center justify-center rounded-xl border px-4 py-2.5 text-sm font-medium"
+                  style={{ borderColor: "var(--border)", color: "var(--fg)", background: "color-mix(in oklab, var(--surface) 90%, transparent)" }}
+                  onClick={() => setShowBindGuard(false)}
+                >
+                  {t("bindGuard.skip")}
+                </button>
+              </div>
             </div>
           </div>
         </div>

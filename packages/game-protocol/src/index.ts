@@ -44,6 +44,35 @@ export interface AgentActRequest {
   actionId?: string;
 }
 
+export type RoomActorType = "player" | "openclaw" | "system";
+export type RoomCommandKind = "join" | "move" | "chat";
+
+export interface RoomCommandRequest {
+  protocolVersion: ProtocolVersion;
+  roomId: string;
+  actorType: RoomActorType;
+  actorId?: string;
+  playerToken?: string;
+  actionId?: string;
+  command: {
+    kind: RoomCommandKind;
+    inviteCode?: string;
+    move?: unknown;
+    text?: string;
+  };
+}
+
+export interface RoomCommandResponse {
+  protocolVersion: ProtocolVersion;
+  roomId: string;
+  ok: boolean;
+  seq: number;
+  actionId?: string;
+  error?: string;
+  state?: unknown;
+  data?: unknown;
+}
+
 export type GameLocale = "en" | "zh";
 
 export interface GameCatalogItem {
@@ -130,6 +159,17 @@ export const GAME_CATALOG: Record<string, GameCatalogItem> = {
       objective: "identify_hidden_word_holders",
       phases: ["clue", "vote", "finished"],
       recommendedEvents: ["phase_change", "private_info", "yourturn", "vote_request", "gameover"],
+    },
+  },
+  guandan: {
+    key: "guandan",
+    name: { en: "Guandan", zh: "掼蛋" },
+    rules: {
+      objective: "teammate_pair_finishes_first",
+      seats: ["north", "east", "south", "west"],
+      deck: "double_54_with_jokers",
+      phases: ["trick_play", "finished"],
+      recommendedEvents: ["yourturn", "action_result", "state_update", "gameover"],
     },
   },
 };
