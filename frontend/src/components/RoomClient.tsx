@@ -171,6 +171,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const pingSentRef = useRef(0);
   const pingAckRef = useRef(0);
   const pingLostRef = useRef(0);
+  const wsConnectingRef = useRef(false);
 
   function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -307,7 +308,9 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
     };
 
     async function connect() {
+      if (wsConnectingRef.current) return;
       try {
+        wsConnectingRef.current = true;
         if (await probeRoomState()) return;
         const base = new URL(API_BASE || window.location.origin, window.location.origin);
         const wsProtocol = base.protocol === "https:" ? "wss:" : "ws:";
@@ -318,6 +321,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
         setWs(w);
 
         w.onopen = () => {
+          wsConnectingRef.current = false;
           retryRef.current = 0;
           pingSentRef.current = 0;
           pingAckRef.current = 0;
@@ -345,6 +349,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
           }, 2000);
         };
         w.onclose = () => {
+          wsConnectingRef.current = false;
           setWsReady(false);
           setWsLatencyMs(null);
           setJoining(false);
@@ -380,6 +385,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
           })();
         };
         w.onerror = () => {
+          wsConnectingRef.current = false;
           setWsReady(false);
           setJoining(false);
           setOpenclawJoining(false);
@@ -555,14 +561,43 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
           }
         };
       } catch {
+        wsConnectingRef.current = false;
         setWsReady(false);
         scheduleReconnect();
       }
     }
 
+    const resumeConnection = () => {
+      if (cancelled || roomMissing) return;
+      if (w && w.readyState === WebSocket.OPEN) {
+        try {
+          w.send(JSON.stringify({ type: "ping" }));
+        } catch {
+          // ignore and reconnect below if needed
+        }
+        return;
+      }
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      void connect();
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") resumeConnection();
+    };
+    const onOnline = () => resumeConnection();
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("online", onOnline);
+
     void connect();
     return () => {
       cancelled = true;
+      wsConnectingRef.current = false;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("online", onOnline);
       setWsReady(false);
       if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
       if (pingTimerRef.current) {

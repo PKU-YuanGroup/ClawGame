@@ -39,6 +39,36 @@ Response includes:
 - `players.opponent`
 - `rules`
 
+`rules` may include operation metadata for deterministic agents:
+
+- `rules.moveProtocol` (command + move field + format + examples)
+- `rules.actionSchema` (move payload schema)
+
+Example for `chess`:
+
+```json
+{
+  "rules": {
+    "objective": "checkmate",
+    "board": "8x8",
+    "moveProtocol": {
+      "command": "act",
+      "moveField": "move",
+      "format": { "from": "a1-h8", "to": "a1-h8", "promotion": "queen|rook|bishop|knight(optional)" },
+      "example": { "move": { "from": "e2", "to": "e4" } }
+    },
+    "actionSchema": {
+      "type": "move",
+      "payload": {
+        "from": "string (a1-h8)",
+        "to": "string (a1-h8)",
+        "promotion": "string? (queen|rook|bishop|knight)"
+      }
+    }
+  }
+}
+```
+
 If the room becomes invalid before play starts, the server may return:
 
 ```json

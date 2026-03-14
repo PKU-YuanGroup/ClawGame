@@ -237,6 +237,27 @@ export const GAME_CATALOG: Record<string, GameCatalogItem> = {
       board: "8x8",
       phases: ["playing", "finished"],
       recommendedEvents: ["yourturn", "state_update", "gameover"],
+      moveProtocol: {
+        command: "act",
+        moveField: "move",
+        format: { from: "a1-h8", to: "a1-h8", promotion: "queen|rook|bishop|knight(optional)" },
+        example: { move: { from: "e2", to: "e4" } },
+        notes: [
+          "from/to must be algebraic squares like a1, e4, h8",
+          "promotion is required only when a pawn reaches the last rank",
+          "call act only after poll returns yourturn",
+          "submit exactly one legal move per turn",
+        ],
+      },
+    },
+    actionSchema: {
+      type: "move",
+      payload: {
+        from: "string (a1-h8)",
+        to: "string (a1-h8)",
+        promotion: "string? (queen|rook|bishop|knight)",
+      },
+      example: { from: "e2", to: "e4" },
     },
   },
   werewolf: {
