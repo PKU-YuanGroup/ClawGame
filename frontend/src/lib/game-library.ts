@@ -5,6 +5,16 @@ import {
   listConfiguredGames as protocolListConfiguredGames,
 } from "@openclaw/game-protocol";
 
+const VISIBLE_GAME_TYPES = [
+  "gomoku",
+  "xiangqi",
+  "chess",
+  "texas_holdem",
+  "who_is_undercover",
+] as const;
+
+const VISIBLE_GAME_SET = new Set<string>(VISIBLE_GAME_TYPES);
+
 export type GameTheme = {
   cardBackground: string;
   roomBackground: string;
@@ -12,6 +22,8 @@ export type GameTheme = {
   ink: string;
   atmosphere: string;
 };
+
+type CoverPalette = [string, string, string];
 
 function svgCover(title: string, subtitle: string, colors: [string, string, string], motif: string): string {
   const svg = `
@@ -34,6 +46,47 @@ function svgCover(title: string, subtitle: string, colors: [string, string, stri
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
+function hashGameType(gameType: string): number {
+  let hash = 2166136261;
+  for (const ch of String(gameType || "")) {
+    hash ^= ch.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash >>> 0);
+}
+
+function generatedCoverPalette(gameType: string): CoverPalette {
+  const hash = hashGameType(gameType);
+  const hue = hash % 360;
+  return [
+    `hsl(${hue} 72% 12%)`,
+    `hsl(${(hue + 38) % 360} 68% 32%)`,
+    `hsl(${(hue + 76) % 360} 80% 62%)`,
+  ];
+}
+
+function generatedMotif(gameType: string): string {
+  const tokens = String(gameType || "").split(/[_-]+/).filter(Boolean);
+  const initials = tokens.map((token) => token[0]?.toUpperCase() || "").join("");
+  return initials.slice(0, 3) || "NEW";
+}
+
+function generatedSubtitle(gameType: string): string {
+  const tokens = String(gameType || "").split(/[_-]+/).filter(Boolean);
+  return tokens.join(" ").toUpperCase() || "NEW GAME";
+}
+
+function generatedGameTheme(gameType: string): GameTheme {
+  const [base, mid, accent] = generatedCoverPalette(gameType);
+  return {
+    cardBackground: `linear-gradient(135deg, ${base} 0%, ${mid} 52%, ${accent} 100%)`,
+    roomBackground: `radial-gradient(circle at 16% 12%, color-mix(in srgb, ${accent} 18%, transparent), transparent 24%), linear-gradient(180deg, color-mix(in srgb, ${base} 88%, black) 0%, ${base} 52%, color-mix(in srgb, ${mid} 70%, black) 100%)`,
+    accent,
+    ink: "#f8fafc",
+    atmosphere: `${getGameLabel(gameType, "en")} placeholder theme`,
+  };
+}
+
 export function getGameLabel(gameType: string, lang: Lang): string {
   return protocolGetGameLabel(gameType, lang);
 }
@@ -44,11 +97,18 @@ export function getGameCover(gameType: string): string {
   if (gameType === "junqi") return svgCover("Junqi", "TACTICAL FRONT", ["#23150e", "#4b2e16", "#a56a2d"], "♜");
   if (gameType === "who_is_undercover") return svgCover("Undercover", "HIDDEN WORD", ["#1d0d33", "#9d174d", "#f97316"], "◈");
   if (gameType === "guandan") return svgCover("Guandan", "DOUBLE DECK", ["#271008", "#7a2d10", "#e2a647"], "🂡");
-  return protocolGetGameCover(gameType);
+  const protocolCover = protocolGetGameCover(gameType);
+  if (!protocolCover.includes("placehold.co/")) return protocolCover;
+  return svgCover(getGameLabel(gameType, "en"), generatedSubtitle(gameType), generatedCoverPalette(gameType), generatedMotif(gameType));
 }
 
 export function listConfiguredGames(): string[] {
-  return protocolListConfiguredGames();
+  const configured = protocolListConfiguredGames();
+  return VISIBLE_GAME_TYPES.filter((gameType) => configured.includes(gameType));
+}
+
+export function isVisibleGame(gameType: string): boolean {
+  return VISIBLE_GAME_SET.has(String(gameType || ""));
 }
 
 export function getGameTheme(gameType: string): GameTheme {
@@ -124,11 +184,5 @@ export function getGameTheme(gameType: string): GameTheme {
       atmosphere: "Heated card table, partner tempo, explosive bombs",
     };
   }
-  return {
-    cardBackground: "linear-gradient(135deg, #111827 0%, #334155 55%, #94a3b8 100%)",
-    roomBackground: "linear-gradient(180deg, #0f172a 0%, #1e293b 60%, #0f172a 100%)",
-    accent: "#fb923c",
-    ink: "#f8fafc",
-    atmosphere: "Competitive arena",
-  };
+  return generatedGameTheme(gameType);
 }

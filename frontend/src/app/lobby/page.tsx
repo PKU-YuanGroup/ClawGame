@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { usePageTitle } from "@/hooks/usePageTitle";
 import { useI18n } from "@/lib/i18n";
@@ -72,6 +72,8 @@ export default function Lobby() {
   const { lang, t } = useI18n();
   const gameTypes = listConfiguredGames();
   const [gameType, setGameType] = useState(gameTypes[0] || "gomoku");
+  const [gameTypeReady, setGameTypeReady] = useState(false);
+  const latestGameTypeRef = useRef(gameType);
   const [visibility, setVisibility] = useState("public");
   const [rooms, setRooms] = useState<LobbyOverviewRoom[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([]);
@@ -83,15 +85,17 @@ export default function Lobby() {
 
   const fetchOverview = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
+      const requestedGameType = gameType;
       if (!silent) setLoading(true);
       try {
-        const data = await api<LobbyOverviewResponse>(`/api/lobby/overview?gameType=${encodeURIComponent(gameType)}`);
+        const data = await api<LobbyOverviewResponse>(`/api/lobby/overview?gameType=${encodeURIComponent(requestedGameType)}`);
+        if (latestGameTypeRef.current !== requestedGameType) return;
         setRooms(Array.isArray(data?.rooms) ? data.rooms : []);
         setLeaderboard(Array.isArray(data?.leaderboard) ? data.leaderboard : []);
       } catch {
         // Keep previous data on refresh errors to avoid UI flicker.
       } finally {
-        if (!silent) setLoading(false);
+        if (!silent && latestGameTypeRef.current === requestedGameType) setLoading(false);
       }
     },
     [gameType],
@@ -99,9 +103,15 @@ export default function Lobby() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const nextGameType = new URLSearchParams(window.location.search).get("gameType") || gameTypes[0] || "gomoku";
+    const requestedGameType = new URLSearchParams(window.location.search).get("gameType") || "";
+    const nextGameType = gameTypes.includes(requestedGameType) ? requestedGameType : (gameTypes[0] || "gomoku");
     setGameType(nextGameType);
+    setGameTypeReady(true);
   }, [gameTypes]);
+
+  useEffect(() => {
+    latestGameTypeRef.current = gameType;
+  }, [gameType]);
 
   useEffect(() => {
     api<MeProfile>("/api/me")
@@ -110,6 +120,7 @@ export default function Lobby() {
   }, []);
 
   useEffect(() => {
+    if (!gameTypeReady) return;
     let cancelled = false;
     void fetchOverview();
     const timer = window.setInterval(() => {
@@ -119,10 +130,21 @@ export default function Lobby() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [fetchOverview]);
+  }, [fetchOverview, gameTypeReady]);
 
   async function refreshOverview() {
     await fetchOverview();
+  }
+
+  async function createRoom() {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const data = await api<any>("/api/match/create", { method: "POST", body: JSON.stringify({ gameType, visibility }) });
+      location.href = `/room?roomId=${data.roomId}&gameType=${gameType}`;
+    } finally {
+      setCreating(false);
+    }
   }
 
   const hasBoundOpenClaw = Boolean(
@@ -183,13 +205,7 @@ export default function Lobby() {
                     setShowBindGuard(true);
                     return;
                   }
-                  setCreating(true);
-                  try {
-                    const data = await api<any>("/api/match/create", { method: "POST", body: JSON.stringify({ gameType, visibility }) });
-                    location.href = `/room?roomId=${data.roomId}&gameType=${gameType}`;
-                  } finally {
-                    setCreating(false);
-                  }
+                  await createRoom();
                 }}
               >
                 {creating ? t("lobby.loading") : t("lobby.createRoom")}
@@ -316,7 +332,55 @@ export default function Lobby() {
           </div>
         </div>
 
-        {rooms.length ? (
+        {loading ? (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, idx) => (
+              <div
+                key={`room_skeleton_${idx}`}
+                className="overflow-hidden rounded-2xl border"
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--surface)",
+                  boxShadow: "0 3px 10px rgba(15, 23, 42, 0.06)",
+                }}
+              >
+                <div className="px-4 py-3 sm:px-5">
+                  <div className="flex items-center justify-end">
+                    <div className="h-6 w-20 animate-pulse rounded-full" style={{ background: "var(--skeleton)" }} />
+                  </div>
+                </div>
+
+                <div className="px-4 py-4 sm:px-5">
+                  <div className="overflow-x-auto pb-1">
+                    <div className="flex min-w-max gap-3">
+                      {Array.from({ length: 4 }).map((__, playerIdx) => (
+                        <div key={`room_skeleton_player_${idx}_${playerIdx}`} className="w-[4.25rem] shrink-0 text-center">
+                          <div className="mx-auto h-11 w-11 animate-pulse rounded-full" style={{ background: "var(--skeleton)" }} />
+                          <div className="mx-auto mt-2 h-3 w-12 animate-pulse rounded" style={{ background: "var(--skeleton)" }} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between gap-3 pt-3">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <div className="h-8 w-8 animate-pulse rounded-full" style={{ background: "var(--skeleton)" }} />
+                      <div className="min-w-0">
+                        <div className="h-3 w-10 animate-pulse rounded" style={{ background: "var(--skeleton)" }} />
+                        <div className="mt-2 h-3 w-20 animate-pulse rounded" style={{ background: "var(--skeleton)" }} />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <div className="h-6 w-16 animate-pulse rounded-full" style={{ background: "var(--skeleton)" }} />
+                      <div className="h-6 w-20 animate-pulse rounded-full" style={{ background: "var(--skeleton)" }} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : rooms.length ? (
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
             {rooms.map((room) => {
               const roster = room.onlinePlayers;
@@ -405,7 +469,7 @@ export default function Lobby() {
           </div>
         ) : (
           <div className="rounded-[28px] border px-5 py-10 text-center text-sm" style={{ borderColor: "var(--border)", background: "var(--surface)", color: "var(--muted)" }}>
-            {loading ? t("lobby.loading") : t("lobby.noRooms")}
+            {t("lobby.noRooms")}
           </div>
         )}
       </section>
@@ -422,14 +486,29 @@ export default function Lobby() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="border-b px-5 py-4 sm:px-6" style={{ borderColor: "color-mix(in oklab, var(--border) 80%, transparent)" }}>
-              <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl" style={{ background: "color-mix(in oklab, #fb923c 20%, transparent)", color: "#ea580c" }}>
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" aria-hidden="true">
-                  <path d="M12 3.5 4 7.5V12c0 5.2 3.4 8.8 8 10 4.6-1.2 8-4.8 8-10V7.5l-8-4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  <path d="M9.5 12.5 11 14l3.5-3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </div>
-              <div className="mt-3 text-lg font-semibold leading-6" style={{ color: "var(--fg)" }}>
-                {t("bindGuard.title")}
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl" style={{ background: "color-mix(in oklab, #fb923c 20%, transparent)", color: "#ea580c" }}>
+                    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" aria-hidden="true">
+                      <path d="M12 3.5 4 7.5V12c0 5.2 3.4 8.8 8 10 4.6-1.2 8-4.8 8-10V7.5l-8-4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                      <path d="M9.5 12.5 11 14l3.5-3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                  <div className="mt-3 text-lg font-semibold leading-6" style={{ color: "var(--fg)" }}>
+                    {t("bindGuard.title")}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border"
+                  style={{ borderColor: "var(--border)", color: "var(--muted)", background: "color-mix(in oklab, var(--surface) 90%, transparent)" }}
+                  onClick={() => setShowBindGuard(false)}
+                  aria-label={t("bindGuard.close")}
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                </button>
               </div>
             </div>
             <div className="px-5 pb-5 pt-4 sm:px-6 sm:pb-6">
@@ -448,9 +527,12 @@ export default function Lobby() {
                   type="button"
                   className="inline-flex flex-1 items-center justify-center rounded-xl border px-4 py-2.5 text-sm font-medium"
                   style={{ borderColor: "var(--border)", color: "var(--fg)", background: "color-mix(in oklab, var(--surface) 90%, transparent)" }}
-                  onClick={() => setShowBindGuard(false)}
+                  onClick={async () => {
+                    setShowBindGuard(false);
+                    await createRoom();
+                  }}
                 >
-                  {t("bindGuard.skip")}
+                  {t("bindGuard.createAnyway")}
                 </button>
               </div>
             </div>

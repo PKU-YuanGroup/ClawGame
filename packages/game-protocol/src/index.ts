@@ -12,7 +12,7 @@ export interface ProtocolEnvelope<T = unknown> {
 
 export interface AgentJoinRequest {
   roomId: string;
-  agentId: string;
+  agentId?: string;
   credential?: string;
   inviteCode?: string;
 }
@@ -26,12 +26,77 @@ export interface AgentJoinResponse {
   playerToken: string;
 }
 
+export interface AgentLoginRequest extends AgentJoinRequest {
+  waitMs?: number;
+}
+
+export interface AgentPlayerSummary {
+  id: string;
+  seat: string | null;
+  clawName?: string;
+  credential?: string;
+  name?: string;
+  openclawName?: string | null;
+}
+
+export interface AgentLoginResponse {
+  protocolVersion: ProtocolVersion;
+  roomId: string;
+  gameType?: string | null;
+  seat?: string | null;
+  playerToken?: string | null;
+  status?: string;
+  rules?: Record<string, unknown>;
+  players?: {
+    me: AgentPlayerSummary;
+    opponent: AgentPlayerSummary | null;
+  };
+  ready: boolean;
+  signal?: "exit";
+  reason?: string;
+}
+
 export interface AgentPollRequest {
   roomId: string;
   credential?: string;
   agentId?: string;
+  playerToken?: string;
   sinceTs?: number;
   sinceSeq?: number;
+  waitMs?: number;
+}
+
+export interface AgentPollMessage {
+  type: string;
+  payload?: unknown;
+  seat?: string | null;
+  status?: string;
+  nextTurn?: string | null;
+  winner?: string;
+  moveCount?: number;
+  state?: unknown;
+}
+
+export interface AgentPollResponse {
+  protocolVersion: ProtocolVersion;
+  roomId: string;
+  ts: number;
+  seq: number;
+  message: AgentPollMessage;
+  supportedMessageTypes: string[];
+  turn: {
+    yourTurn: boolean;
+    gameOver: boolean;
+    haltForLlm: boolean;
+    seat: string | null;
+    nextTurn: string | null;
+    status: string;
+  };
+  connection: {
+    keepAlive: boolean;
+    shouldDisconnect: boolean;
+    reason: string;
+  };
 }
 
 export interface AgentActRequest {
@@ -42,6 +107,34 @@ export interface AgentActRequest {
   chatText?: string;
   senderId?: string;
   actionId?: string;
+}
+
+export interface AgentActResponse {
+  protocolVersion: ProtocolVersion;
+  roomId: string;
+  actionId?: string;
+  move?: unknown;
+  chat?: unknown;
+}
+
+export interface AgentMessageRequest {
+  roomId: string;
+  senderId?: string;
+  chatText: string;
+  credential?: string;
+}
+
+export interface AgentExitRequest {
+  roomId: string;
+  playerToken?: string;
+  waitMs?: number;
+  credential?: string;
+}
+
+export interface AgentExitResponse {
+  ok: boolean;
+  next: "continue_poll" | "end_session";
+  reason: string;
 }
 
 export type RoomActorType = "player" | "openclaw" | "system";
@@ -80,6 +173,8 @@ export interface GameCatalogItem {
   name: { en: string; zh: string };
   cover?: string;
   rules: Record<string, unknown>;
+  roomRules?: Record<string, unknown>;
+  actionSchema?: Record<string, unknown>;
 }
 
 export const GAME_CATALOG: Record<string, GameCatalogItem> = {
@@ -113,6 +208,25 @@ export const GAME_CATALOG: Record<string, GameCatalogItem> = {
       board: "9x10",
       phases: ["playing", "finished"],
       recommendedEvents: ["yourturn", "state_update", "gameover"],
+      moveProtocol: {
+        command: "act",
+        moveField: "move",
+        format: { from: "a0-i9", to: "a0-i9" },
+        example: { move: { from: "b0", to: "c2" } },
+        notes: [
+          "from/to must be algebraic board squares like a0, e2, i9",
+          "call act only after poll returns yourturn",
+          "submit exactly one legal move per turn",
+        ],
+      },
+    },
+    actionSchema: {
+      type: "move",
+      payload: {
+        from: "string (a0-i9)",
+        to: "string (a0-i9)",
+      },
+      example: { from: "b0", to: "c2" },
     },
   },
   chess: {
@@ -201,12 +315,29 @@ export function getGameCover(gameType: string): string {
 export function getGameRules(gameType: string, fallbackEvents: readonly string[] = []): Record<string, unknown> {
   const key = String(gameType || "").trim();
   const item = GAME_CATALOG[key];
-  if (item) return item.rules;
+  if (item) {
+    if (item.actionSchema) return { ...item.rules, actionSchema: item.actionSchema };
+    return item.rules;
+  }
   return {
     objective: "follow_room_rules",
     phases: ["waiting", "playing", "finished"],
     recommendedEvents: fallbackEvents,
   };
+}
+
+export function getGameRoomRules(gameType: string): Record<string, unknown> {
+  const key = String(gameType || "").trim();
+  const item = GAME_CATALOG[key];
+  if (item?.roomRules) return item.roomRules;
+  return {};
+}
+
+export function getGameActionSchema(gameType: string): Record<string, unknown> {
+  const key = String(gameType || "").trim();
+  const item = GAME_CATALOG[key];
+  if (item?.actionSchema) return item.actionSchema;
+  return { type: "move", payload: {} };
 }
 
 export function listConfiguredGames(): string[] {

@@ -58,6 +58,7 @@ function getViewerId(userId?: string) {
 
 function normalizeProfileId(id?: string) {
   if (!id) return "";
+  if (id.startsWith("spectator:")) return id.slice("spectator:".length);
   if (id.startsWith("openclaw:")) return id.slice("openclaw:".length);
   return id;
 }
@@ -69,6 +70,13 @@ function isBotId(id?: string) {
 function botUserIdOf(id?: string) {
   const normalized = normalizeProfileId(id);
   return normalized.startsWith("bot:") ? normalized : "";
+}
+
+function inferSenderTypeById(id?: string): ChatMessage["senderType"] {
+  const raw = String(id || "");
+  if (!raw) return "user";
+  if (raw.startsWith("openclaw:")) return "openclaw";
+  return "user";
 }
 
 const CHESS_GLYPHS: Record<string, string> = {
@@ -544,7 +552,9 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
         ...online.users,
         ...online.openclaw,
         ...online.spectators,
+        ...(Array.isArray(snapshot?.players) ? snapshot.players : []),
         ...chat.map((m) => ({ id: m.senderId || "" })),
+        ...moveHistory.map((m) => ({ id: m.actorId || "" })),
       ]
         .map((u: any) => normalizeProfileId(u.id))
         .filter((id) => id && !id.startsWith("guest") && (!profiles[id] || !Array.isArray(profiles[id]?.badgeDetails)))),
@@ -555,7 +565,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
         .then((p: any) => setProfiles((prev) => ({ ...prev, [id]: p || { id } })))
         .catch(() => setProfiles((prev) => ({ ...prev, [id]: { id } })));
     });
-  }, [online, chat, profiles]);
+  }, [online, chat, snapshot, moveHistory, profiles]);
 
   function pushToast(text: string, level: "error" | "info" = "info") {
     const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -848,6 +858,10 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
 
   function removeMyOpenclaw() {
     if (openclawRemoving) return;
+    if (statusText !== "waiting") {
+      pushToast(t("room.toastRemoveOpenclawFailed"), "error");
+      return;
+    }
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       pushToast(t("room.toastWsNotConnected"), "error");
       return;
@@ -875,7 +889,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
     if (isBotId(id) || isBotId(profileId)) return t("room.botName");
     const p = profileByAnyId(id);
     if (senderType === "openclaw") {
-      return p?.clawNickname || me?.clawNickname || p?.nickname || me?.nickname || p?.name || me?.name || profileId;
+      return p?.clawNickname || p?.nickname || p?.name || profileId;
     }
     return p?.nickname || p?.name || profileId;
   }
@@ -886,7 +900,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
     if (isBotId(id) || isBotId(profileId)) return "https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f916.png";
     const p = profileByAnyId(id);
     if (senderType === "openclaw") {
-      return p?.clawAvatarUrl || me?.clawAvatarUrl || p?.avatarUrl || me?.avatarUrl || DEFAULT_AVATAR;
+      return p?.clawAvatarUrl || p?.avatarUrl || DEFAULT_AVATAR;
     }
     return p?.avatarUrl || DEFAULT_AVATAR;
   }
@@ -955,15 +969,18 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
           : !isMyTurn
             ? t("room.waitYourTurn")
             : "";
-  const openclawBySeat = Array.isArray(snapshot?.players)
+  const participantBySeat = Array.isArray(snapshot?.players)
     ? snapshot.players.reduce((acc: Record<string, string>, player: any) => {
-      if (player?.seat && player?.id?.startsWith("openclaw:") && !acc[player.seat]) {
-        acc[player.seat] = player.id;
+      const seat = String(player?.seat || "");
+      const id = String(player?.id || "");
+      if (!seat || !id || id.startsWith("guest")) return acc;
+      if (!acc[seat]) {
+        acc[seat] = id;
       }
       return acc;
     }, {})
     : {};
-  const hasOpenclawSeat = Object.keys(openclawBySeat).length > 0;
+  const hasSeatParticipant = Object.keys(participantBySeat).length > 0;
   const clockState = (gameState as any)?.clock || {};
   const clockRemaining = clockState?.remainingMs || {};
   const turnStartedAt = Number(clockState?.turnStartedAt || 0);
@@ -982,12 +999,12 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
     }
     return base;
   };
-  const turnPlayerName = turnText === "-" ? "-" : (displayNameById(openclawBySeat[turnText]) || t("room.hudNoSeatYet"));
+  const turnPlayerName = turnText === "-" ? "-" : (displayNameById(participantBySeat[turnText], inferSenderTypeById(participantBySeat[turnText])) || t("room.hudNoSeatYet"));
   const seatRows = ["black", "white"].map((seat) => ({
     seat,
-    playerId: openclawBySeat[seat] || "",
-    name: displayNameById(openclawBySeat[seat]) || t("room.hudNoSeatYet"),
-    avatar: avatarById(openclawBySeat[seat], "openclaw"),
+    playerId: participantBySeat[seat] || "",
+    name: displayNameById(participantBySeat[seat], inferSenderTypeById(participantBySeat[seat])) || t("room.hudNoSeatYet"),
+    avatar: avatarById(participantBySeat[seat], inferSenderTypeById(participantBySeat[seat])),
     remainText: formatMs(seatRemainMs(seat)),
   }));
   const winnerSeat = String((gameState as any)?.winner || gameOverWinner || "");
@@ -1821,7 +1838,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
             </div>
             <div className="mt-3 border-t pt-2" style={{ borderColor: "var(--border)" }}>
               <div className="mb-2 text-xs" style={{ color: "color-mix(in oklab, var(--fg) 68%, transparent)" }}>OpenClaw Seats</div>
-              {!hasOpenclawSeat ? (
+              {!hasSeatParticipant ? (
                 <div className="rounded-md px-2 py-2 text-xs" style={{ background: "color-mix(in oklab, var(--surface) 86%, transparent)", color: "var(--fg)" }}>
                   {t("room.hudAwaitingOpenclaw")}
                 </div>
@@ -1829,13 +1846,14 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
                 <>
                   <div className="grid gap-2 rounded-xl px-2 py-2" style={{ background: "color-mix(in oklab, var(--surface) 86%, transparent)" }}>
                     {genericSeatList.map((seat) => {
-                      const playerId = openclawBySeat[seat] || "";
+                      const playerId = participantBySeat[seat] || "";
+                      const senderType = inferSenderTypeById(playerId);
                       return (
                         <div key={seat} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-2" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
                           <div className="flex items-center gap-2">
-                            <img src={avatarById(playerId, "openclaw")} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-9 w-9 rounded-full border object-cover" style={{ borderColor: "rgba(255,255,255,0.14)" }} alt={seat} />
+                            <img src={avatarById(playerId, senderType)} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-9 w-9 rounded-full border object-cover" style={{ borderColor: "rgba(255,255,255,0.14)" }} alt={seat} />
                             <div>
-                              <div className="text-[11px]" style={{ color: "var(--fg)" }}>{displayNameById(playerId, "openclaw") || t("room.hudNoSeatYet")}</div>
+                              <div className="text-[11px]" style={{ color: "var(--fg)" }}>{displayNameById(playerId, senderType) || t("room.hudNoSeatYet")}</div>
                               <div className="text-[10px]" style={{ color: "color-mix(in oklab, var(--fg) 68%, transparent)" }}>{seat}</div>
                             </div>
                           </div>
@@ -1851,7 +1869,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
                         <div className="text-[11px]" style={{ color: "color-mix(in oklab, var(--fg) 62%, transparent)" }}>-</div>
                       ) : [...moveHistory].reverse().map((mv, idx) => (
                         <div key={mv.id} className="flex items-center justify-between text-[11px]" style={{ color: "var(--fg)" }}>
-                          <span className="truncate">{moveHistory.length - idx}. {displayNameById(mv.actorId, "openclaw")}</span>
+                          <span className="truncate">{moveHistory.length - idx}. {displayNameById(mv.actorId, inferSenderTypeById(mv.actorId))}</span>
                           <span className="ml-2 shrink-0">{mv.text}</span>
                         </div>
                       ))}
@@ -1887,7 +1905,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
                         <div className="text-[11px]" style={{ color: "color-mix(in oklab, var(--fg) 62%, transparent)" }}>-</div>
                       ) : [...moveHistory].reverse().map((mv, idx) => (
                         <div key={mv.id} className="flex items-center justify-between text-[11px]" style={{ color: "var(--fg)" }}>
-                          <span className="truncate">{moveHistory.length - idx}. {displayNameById(mv.actorId, "openclaw")}</span>
+                          <span className="truncate">{moveHistory.length - idx}. {displayNameById(mv.actorId, inferSenderTypeById(mv.actorId))}</span>
                           <span className="ml-2 shrink-0">{mv.text}</span>
                         </div>
                       ))}
@@ -1912,7 +1930,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
           {allPlayerEntries.map((u) => {
             const rowIsOwner = isOwnerId(u.id);
             const type = u.id.startsWith("openclaw:") ? "openclaw" : "user";
-            const canRemoveOwnOpenclaw = Boolean(myOpenclawId) && u.id === myOpenclawId;
+            const canRemoveOwnOpenclaw = Boolean(myOpenclawId) && u.id === myOpenclawId && statusText === "waiting";
             return (
               <div className="flex items-center gap-2 text-sm" key={`u_${u.id}`}>
                 <img src={avatarById(u.id, type)} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-7 w-7 cursor-pointer rounded-full border border-slate-700 object-cover" alt="avatar" onClick={() => openProfileCard(u.id, type)} />

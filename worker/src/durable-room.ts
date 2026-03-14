@@ -534,10 +534,15 @@ export class GameRoomDO {
     const meta = this.sockets.get(ws);
     if (!meta) return;
     const data = await this.requireRoom();
+    const status = String((data.state as any)?.status || "waiting");
 
     const viewerId = String(meta.viewerId || "").trim();
     if (!viewerId || viewerId.startsWith("guest")) {
       ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "remove_openclaw", ok: false, error: "login required" })));
+      return;
+    }
+    if (status !== "waiting") {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "remove_openclaw", ok: false, error: "can only remove openclaw before game starts" })));
       return;
     }
 

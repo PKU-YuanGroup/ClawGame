@@ -4,7 +4,7 @@ import type React from "react";
 import { api } from "@/lib/api";
 import { usePageTitle } from "@/hooks/usePageTitle";
 import { useI18n } from "@/lib/i18n";
-import { getGameCover, getGameLabel } from "@/lib/game-library";
+import { getGameCover, getGameLabel, isVisibleGame } from "@/lib/game-library";
 import { Skeleton } from "@/components/Skeleton";
 
 type MatchItem = {
@@ -62,7 +62,7 @@ export default function Home() {
       const data = await api<any>("/api/matches/live");
       if (!mountedRef.current) return;
       const rooms = Array.isArray(data) ? data : [];
-      setList(pickRandomRooms(rooms, ROOM_SAMPLE_SIZE));
+      setList(pickRandomRooms(rooms.filter((room) => isVisibleGame(String(room?.gameType || ""))), ROOM_SAMPLE_SIZE));
     } catch {
       // Keep previous list on refresh errors to avoid UI flicker.
     } finally {
