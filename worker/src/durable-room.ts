@@ -3,6 +3,14 @@ import type { MatchPlayer, MatchState, Seat } from "./games/types";
 import type { Env } from "./types";
 import type { ProtocolEnvelope, RoomCommandRequest, RoomCommandResponse } from "@openclaw/game-protocol";
 import { storeDelete } from "./lib/store";
+import {
+  AGENT_IDLE_TTL_MS,
+  BOT_MOVE_DELAY_MS,
+  DEFAULT_ROOM_AUTO_RESET_MS,
+  EMPTY_ROOM_TTL_MS,
+  ROOM_KEY,
+  TURN_TIMEOUT_MS,
+} from "./room/constants";
 
 export type RoomVisibility = "public" | "private";
 
@@ -53,13 +61,6 @@ interface WsMeta {
   player?: MatchPlayer;
   viewerId?: string;
 }
-
-const ROOM_KEY = "room:data";
-const EMPTY_ROOM_TTL_MS = 2 * 60 * 1000;
-const AGENT_IDLE_TTL_MS = 3 * 60 * 1000;
-const TURN_TIMEOUT_MS = 30_000;
-const BOT_MOVE_DELAY_MS = 1200;
-const DEFAULT_ROOM_AUTO_RESET_MS = 30_000;
 
 export class GameRoomDO {
   private sockets = new Map<WebSocket, WsMeta>();
@@ -135,11 +136,33 @@ export class GameRoomDO {
   }
 
   webSocketClose(ws: WebSocket): void {
+    const closedMeta = this.sockets.get(ws);
     this.sockets.delete(ws);
+    if (closedMeta?.player && !closedMeta.player.id.startsWith("openclaw:") && !this.isBotUserId(closedMeta.player.id)) {
+      void this.releasePlayerOnSocketClose(closedMeta.player.id);
+    }
     void this.pushOnlineUpdate();
     if (this.sockets.size === 0) {
       void this.cleanupWhenRoomEmpty();
     }
+  }
+
+  private hasActiveSocketForPlayer(playerId: string): boolean {
+    for (const meta of this.sockets.values()) {
+      const socketPlayerId = String(meta.player?.id || "");
+      if (!socketPlayerId) continue;
+      if (socketPlayerId === playerId) return true;
+    }
+    return false;
+  }
+
+  private async releasePlayerOnSocketClose(playerId: string): Promise<void> {
+    if (this.hasActiveSocketForPlayer(playerId)) return;
+    const data = await this.load();
+    if (!data) return;
+    const exists = data.players.some((p) => p.id === playerId);
+    if (!exists) return;
+    await this.removePlayerById(data, playerId);
   }
 
   async alarm(): Promise<void> {
@@ -186,7 +209,7 @@ export class GameRoomDO {
       role,
       seat: player?.seat,
       capabilities: ["submit_action", "ping"],
-      rules: this.rulesFor(data.gameType),
+      rules: getEngine(data.gameType).rules,
     })));
     server.send(JSON.stringify(this.envelope(data, "sync_state", this.toSnapshot(data))));
     server.send(JSON.stringify(this.envelope(data, "chat_history", { messages: (data.chats || []).slice(-100) })));
@@ -195,7 +218,7 @@ export class GameRoomDO {
     if (player && data.state.status === "playing" && data.state.nextTurn === player.seat) {
       server.send(JSON.stringify(this.envelope(data, "your_turn", {
         seat: player.seat,
-        legalAction: this.actionSchema(data.gameType),
+        legalAction: getEngine(data.gameType).actionSchema,
       })));
     }
 
@@ -257,55 +280,6 @@ export class GameRoomDO {
       return true;
     }
     return false;
-  }
-
-  private rulesFor(gameType: string): unknown {
-    if (gameType === "gomoku") {
-      return { boardSize: 15, winCondition: "five_in_a_row", first: "black" };
-    }
-    if (gameType === "xiangqi") {
-      return { board: "9x10", notation: "a0-i9", objective: "checkmate", first: "black" };
-    }
-    if (gameType === "go") {
-      return { boardSize: 19, komi: 6.5, objective: "territory", passEndsAfter: 2, first: "black" };
-    }
-    if (gameType === "chess") {
-      return { board: "8x8", notation: "a1-h8", objective: "checkmate", castling: true, enPassant: true, first: "black" };
-    }
-    if (gameType === "texas_holdem") {
-      return { seats: 6, blinds: { small: 5, big: 10 }, streets: ["preflop", "flop", "turn", "river", "showdown"] };
-    }
-    if (gameType === "werewolf") {
-      return { seats: 8, phases: ["night", "day", "vote"], hiddenRoles: true };
-    }
-    if (gameType === "junqi") {
-      return { board: "5x6", objective: "capture_flag", first: "red" };
-    }
-    if (gameType === "who_is_undercover") {
-      return { seats: 8, phases: ["clue", "vote"], hiddenWords: true };
-    }
-    if (gameType === "guandan") {
-      return {
-        seats: ["north", "east", "south", "west"],
-        teams: [["north", "south"], ["east", "west"]],
-        deck: "two_standard_decks_with_jokers",
-        objective: "one_team_finishes_both_players_first",
-      };
-    }
-    return {};
-  }
-
-  private actionSchema(gameType: string): unknown {
-    if (gameType === "gomoku") return { type: "move", payload: { x: "number", y: "number" } };
-    if (gameType === "xiangqi") return { type: "move", payload: { from: "string", to: "string" } };
-    if (gameType === "go") return { type: "move", payload: { x: "number", y: "number", pass: "boolean?" } };
-    if (gameType === "chess") return { type: "move", payload: { from: "string", to: "string", promotion: "string?" } };
-    if (gameType === "texas_holdem") return { type: "action", payload: { action: "fold|check|call|raise", amount: "number?" } };
-    if (gameType === "werewolf") return { type: "action", payload: { action: "night_kill|inspect|save|vote|ready", target: "string?" } };
-    if (gameType === "junqi") return { type: "move", payload: { from: "string", to: "string" } };
-    if (gameType === "who_is_undercover") return { type: "action", payload: { action: "clue|vote", text: "string?", target: "string?" } };
-    if (gameType === "guandan") return { type: "move", payload: { action: "play|pass", cards: "string[]?" } };
-    return { type: "move", payload: {} };
   }
 
   private async handleSubmitAction(ws: WebSocket, payload: any): Promise<void> {
@@ -392,7 +366,7 @@ export class GameRoomDO {
     const playerId = meta.player?.id || meta.viewerId;
     if (!playerId) return;
 
-    await this.removeParticipantById(data, playerId);
+    await this.removePlayerById(data, playerId);
     meta.player = undefined;
     meta.role = "spectator";
     this.sockets.set(ws, meta);
@@ -616,7 +590,7 @@ export class GameRoomDO {
       if (meta.player && meta.player.seat === data.state.nextTurn) {
         ws.send(JSON.stringify(this.envelope(data, "your_turn", {
           seat: data.state.nextTurn,
-          legalAction: this.actionSchema(data.gameType),
+          legalAction: getEngine(data.gameType).actionSchema,
         })));
       }
     }
@@ -711,10 +685,6 @@ export class GameRoomDO {
     return used.has("black") ? "white" : "black";
   }
 
-  private participantCount(data: RoomData): number {
-    return new Set(data.players.map((p) => this.normalizeParticipantId(p.id))).size;
-  }
-
   private humanPlayerCount(data: RoomData): number {
     return data.players.filter((p) => !p.id.startsWith("openclaw:")).length;
   }
@@ -738,6 +708,11 @@ export class GameRoomDO {
     for (const [participantId, sides] of participants.entries()) {
       if (this.isBotUserId(participantId)) {
         ready += 1;
+        continue;
+      }
+      if (sides.hasUser && sides.hasOpenclaw) {
+        // Allow owner-vs-own-OpenClaw in the same room.
+        ready += 2;
         continue;
       }
       if (sides.hasUser || sides.hasOpenclaw) ready += 1;
@@ -899,6 +874,12 @@ export class GameRoomDO {
     if (data.visibility === "private" && data.inviteCode && data.inviteCode !== inviteCode) {
       throw new Error("Invalid invite code");
     }
+    const participantId = this.normalizeParticipantId(playerId);
+    if (playerId.startsWith("openclaw:")) {
+      if (!this.isParticipantOnlineInRoom(data, participantId)) {
+        throw new Error("owner must be online in room (player or spectator)");
+      }
+    }
 
     const existed = data.players.find((p) => p.id === playerId);
     if (existed) {
@@ -909,15 +890,11 @@ export class GameRoomDO {
       return { playerToken: existed.token, seat: existed.seat };
     }
 
-    const participantId = this.normalizeParticipantId(playerId);
-    const participantCount = this.participantCount(data);
-    const hasParticipant = data.players.some((p) => this.normalizeParticipantId(p.id) === participantId);
     const maxParticipants = this.gameMaxParticipants(data.gameType);
-    if (!hasParticipant && participantCount >= maxParticipants) throw new Error("Room is full");
+    // Capacity is based on occupied seats/sides, not participant identity.
+    if (data.players.length >= maxParticipants) throw new Error("Room is full");
 
-    const seat = playerId.startsWith("openclaw:")
-      ? (data.players.find((p) => this.normalizeParticipantId(p.id) === participantId)?.seat || this.nextSeatFor(data))
-      : this.nextSeatFor(data);
+    const seat = this.nextSeatFor(data);
 
     const token = crypto.randomUUID();
     data.players.push({ id: playerId, seat, token });
@@ -946,6 +923,69 @@ export class GameRoomDO {
       void this.runBotTurns(data);
     }
     return { playerToken: token, seat };
+  }
+
+  private isParticipantOnlineInRoom(data: RoomData, participantId: string): boolean {
+    if (!participantId) return false;
+
+    const online = this.currentOnline(data);
+    const userOnline = online.users.some((u) => this.normalizeParticipantId(String(u.id || "")) === participantId);
+    const spectatorOnline = online.spectators.some((u) => this.normalizeParticipantId(String(u.id || "")) === participantId);
+    if (userOnline || spectatorOnline) return true;
+
+    // Fallback: explicit socket metadata check for racey snapshots.
+    return Array.from(this.sockets.values()).some((meta) => {
+      const viewerId = String(meta.viewerId || "").trim();
+      if (viewerId && !viewerId.startsWith("guest") && this.normalizeParticipantId(viewerId) === participantId) {
+        return true;
+      }
+      const playerId = String(meta.player?.id || "").trim();
+      if (playerId && this.normalizeParticipantId(playerId) === participantId) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  private async removePlayerById(data: RoomData, playerId: string): Promise<boolean> {
+    const existed = data.players.some((p) => p.id === playerId);
+    if (!existed) return false;
+
+    const participantId = this.normalizeParticipantId(playerId);
+    data.players = data.players.filter((p) => p.id !== playerId);
+    if (!data.rematch) data.rematch = { votes: {}, closed: false };
+    const hasParticipantSideLeft = data.players.some((p) => this.normalizeParticipantId(p.id) === participantId);
+    if (!hasParticipantSideLeft) {
+      delete data.rematch.votes[participantId];
+    }
+
+    for (const [socket, socketMeta] of this.sockets.entries()) {
+      if (!socketMeta.player) continue;
+      if (socketMeta.player.id !== playerId) continue;
+      socketMeta.player = undefined;
+      if (socketMeta.role !== "agent") socketMeta.role = "spectator";
+      this.sockets.set(socket, socketMeta);
+    }
+
+    const readyParticipants = this.readyParticipantCount(data);
+    const hasRequiredNonHuman = this.hasOpenclawOrBotParticipant(data);
+    if (readyParticipants < this.gameMinParticipants(data.gameType) || !hasRequiredNonHuman) {
+      (data.state as any).status = "waiting";
+      this.clearFinishedMarkers(data.state as any);
+    }
+    if (!data.players.some((p) => p.id.startsWith("openclaw:"))) {
+      data.agentLastSeenAt = undefined;
+    }
+
+    if (data.players.length === 0 && !data.persistent) {
+      // Keep an empty room snapshot for connected spectators; cleanup runs when sockets drain.
+      await storeDelete(this.env, `lobby:${data.roomId}`);
+    }
+
+    await this.save(data);
+    this.broadcast(data, "state_update", this.toSnapshot(data));
+    this.broadcast(data, "online_update", this.currentOnline(data));
+    return true;
   }
 
   private async removeParticipantById(data: RoomData, participantPlayerId: string): Promise<boolean> {
@@ -1149,7 +1189,7 @@ export class GameRoomDO {
       return json({ ok: true, alreadyLeft: true });
     }
 
-    await this.removeParticipantById(data, leaving.id);
+    await this.removePlayerById(data, leaving.id);
     return json({ ok: true });
   }
 

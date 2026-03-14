@@ -103,7 +103,7 @@ const XIANGQI_GLYPHS: Record<string, string> = {
   white_soldier: "兵",
 };
 
-export function RoomClient({ roomId }: { roomId: string }) {
+export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; gameTypeHint?: string }) {
   const [me, setMe] = useState<Me | null>(null);
   const [meChecked, setMeChecked] = useState(false);
   const { lang, t } = useI18n();
@@ -124,6 +124,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const [guandanCards, setGuandanCards] = useState("");
   const [profiles, setProfiles] = useState<Record<string, UserProfile>>({});
   const [snapshot, setSnapshot] = useState<any>(null);
+  const [roomMissing, setRoomMissing] = useState(false);
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [wsReady, setWsReady] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
@@ -216,9 +217,37 @@ export function RoomClient({ roomId }: { roomId: string }) {
     if (!roomId || !meChecked) return;
     let cancelled = false;
     let w: WebSocket | null = null;
+    setRoomMissing(false);
+
+    function isRoomMissingError(err: unknown): boolean {
+      const message = err instanceof Error ? err.message : String(err || "");
+      const normalized = message.trim().toLowerCase();
+      return normalized.includes("room not found") || normalized.includes("not found") || normalized.includes("http 404");
+    }
+
+    async function probeRoomState(): Promise<boolean> {
+      try {
+        const state = await api<any>(`/api/room/state?roomId=${encodeURIComponent(roomId)}`);
+        if (cancelled) return false;
+        setSnapshot(state || null);
+        setRoomMissing(false);
+        return false;
+      } catch (err) {
+        if (cancelled || !isRoomMissingError(err)) return false;
+        if (reconnectTimerRef.current) {
+          window.clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
+        setRoomMissing(true);
+        setSnapshot(null);
+        setOnline({ users: [], openclaw: [], spectators: [] });
+        setWsReady(false);
+        return true;
+      }
+    }
 
     const scheduleReconnect = () => {
-      if (cancelled) return;
+      if (cancelled || roomMissing) return;
       const delay = Math.min(5000, 600 + retryRef.current * 700);
       retryRef.current += 1;
       if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
@@ -229,6 +258,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
     async function connect() {
       try {
+        if (await probeRoomState()) return;
         const base = new URL(API_BASE || window.location.origin, window.location.origin);
         const wsProtocol = base.protocol === "https:" ? "wss:" : "ws:";
         const url = `${wsProtocol}//${base.host}/ws/room/${roomId}?role=spectator&viewerId=${encodeURIComponent(getViewerId(me?.id))}`;
@@ -247,6 +277,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
           setWsPacketLossPct(0);
           setWsReady(true);
           setHasConnectedOnce(true);
+          setRoomMissing(false);
           if (pingTimerRef.current) window.clearInterval(pingTimerRef.current);
           pingTimerRef.current = window.setInterval(() => {
             if (!w || w.readyState !== WebSocket.OPEN) return;
@@ -288,7 +319,10 @@ export function RoomClient({ roomId }: { roomId: string }) {
             pingTimerRef.current = null;
           }
           pingSentAtRef.current = null;
-          scheduleReconnect();
+          void (async () => {
+            if (await probeRoomState()) return;
+            scheduleReconnect();
+          })();
         };
         w.onerror = () => {
           setWsReady(false);
@@ -518,30 +552,28 @@ export function RoomClient({ roomId }: { roomId: string }) {
   }
 
   async function joinOpenclawGame() {
-    if (!me?.id || !roomId || openclawJoining) return;
+    if (!roomId || openclawJoining) return;
+    const joinPromptTemplate = t("room.joinOpenclawPromptTemplate");
+    const joinPrompt = (joinPromptTemplate || "使用 ClawGame Skill 加入房间 {{roomId}}")
+      .replace("{{roomId}}", roomId);
     setOpenclawJoining(true);
     try {
-      const bindState = await api<{ hasCredential?: boolean }>("/api/me/claw-token", { method: "POST" });
-      if (!bindState?.hasCredential) {
-        const message = t("room.toastOpenclawBindRequired");
-        pushToast(message, "error");
-        setOpenclawBindModalOpen(true);
-        return;
-      }
-      const data = await api<any>("/api/match/join-openclaw", {
-        method: "POST",
-        body: JSON.stringify({ roomId }),
-      });
-      void refreshRoomPresence();
-    } catch (err) {
-      const message = (err as Error).message || t("room.toastJoinGameFailed");
-      if (message.includes("openclaw is not bound")) {
-        const bindMessage = t("room.toastOpenclawBindRequired");
-        pushToast(bindMessage, "error");
-        setOpenclawBindModalOpen(true);
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(joinPrompt);
       } else {
-        pushToast(message, "error");
+        const textarea = document.createElement("textarea");
+        textarea.value = joinPrompt;
+        textarea.setAttribute("readonly", "true");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
       }
+      pushToast(t("room.toastOpenclawPromptCopied"), "info");
+    } catch {
+      pushToast(t("room.toastOpenclawPromptCopyFailed"), "error");
     } finally {
       setOpenclawJoining(false);
     }
@@ -743,6 +775,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
         api<any>(`/api/room/online?roomId=${encodeURIComponent(roomId)}`),
       ]);
       if (state) setSnapshot(state);
+      setRoomMissing(false);
       if (onlineRes) {
         setOnline({
           users: Array.isArray(onlineRes?.users) ? onlineRes.users : [],
@@ -750,7 +783,18 @@ export function RoomClient({ roomId }: { roomId: string }) {
           spectators: Array.isArray(onlineRes?.spectators) ? onlineRes.spectators : [],
         });
       }
-    } catch {}
+    } catch (err) {
+      const message = err instanceof Error ? err.message.toLowerCase() : String(err || "").toLowerCase();
+      if (message.includes("room not found") || message.includes("not found") || message.includes("http 404")) {
+        if (reconnectTimerRef.current) {
+          window.clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
+        setRoomMissing(true);
+        setSnapshot(null);
+        setOnline({ users: [], openclaw: [], spectators: [] });
+      }
+    }
   }
 
   function removeBot(botId?: string) {
@@ -832,6 +876,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
       .filter(Boolean),
   )).map((botId: string) => ({ id: `openclaw:${botId}`, botId }));
   const gameType = snapshot?.gameType || gameState?.gameType || "gomoku";
+  const lobbyGameType = String(snapshot?.gameType || gameState?.gameType || gameTypeHint || "").trim();
   const gameLabel = getGameLabel(gameType, lang);
   const gameTheme = getGameTheme(gameType);
   const supportsBot = ["gomoku", "go", "xiangqi", "chess", "texas_holdem", "werewolf", "junqi", "who_is_undercover", "guandan"].includes(gameType);
@@ -974,6 +1019,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
     : lowSignal
       ? "unstable"
       : "online";
+  const lobbyHref = lobbyGameType ? `/lobby?gameType=${encodeURIComponent(lobbyGameType)}` : "/game";
 
   function renderStone(v: unknown) {
     if (v === "black") return <span className="stone stone-black" />;
@@ -1157,9 +1203,9 @@ export function RoomClient({ roomId }: { roomId: string }) {
               className="inline-flex h-8 items-center justify-center rounded border px-2 text-xs font-semibold disabled:opacity-50"
               style={{ borderColor: "var(--border)", color: "var(--fg)" }}
               onClick={joinOpenclawGame}
-              disabled={!me?.id || openclawJoining || myOpenclawJoined}
+              disabled={openclawJoining}
             >
-              {myOpenclawJoined ? t("room.openclawJoined") : openclawJoining ? t("room.joining") : t("room.joinAsOpenclaw")}
+              {openclawJoining ? t("room.joining") : t("room.copyOpenclawPrompt")}
             </button>
             {supportsBot ? (
             <>
@@ -1366,7 +1412,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
             )}
           </div>
         ) : null}
-        <div className="grid flex-1 grid-cols-1 gap-3 xl:grid-cols-[1fr_260px]">
+        <div className={`grid flex-1 grid-cols-1 gap-3 ${isGameFinished ? "" : "xl:grid-cols-[1fr_260px]"}`}>
           <div className="flex items-center justify-center">
           {wsReady ? (
             isGameFinished ? (
@@ -1942,12 +1988,17 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
       {openclawBindModalOpen ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-4" onClick={() => setOpenclawBindModalOpen(false)}>
-          <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-4" onClick={(e) => e.stopPropagation()}>
-            <div className="text-base font-semibold">{t("room.openclawBindRequiredTitle")}</div>
-            <div className="mt-2 text-sm text-slate-300">{t("room.toastOpenclawBindRequired")}</div>
+          <div
+            className="w-full max-w-md rounded-xl border p-4"
+            style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-base font-semibold" style={{ color: "var(--fg)" }}>{t("room.openclawBindRequiredTitle")}</div>
+            <div className="mt-2 text-sm" style={{ color: "var(--muted)" }}>{t("room.toastOpenclawBindRequired")}</div>
             <div className="mt-4 flex justify-end gap-2">
               <button
-                className="rounded border border-slate-700 px-3 py-1.5 text-xs text-slate-200"
+                className="rounded border px-3 py-1.5 text-xs"
+                style={{ borderColor: "var(--border)", color: "var(--fg)" }}
                 onClick={() => setOpenclawBindModalOpen(false)}
               >
                 {t("room.close")}
@@ -1964,7 +2015,30 @@ export function RoomClient({ roomId }: { roomId: string }) {
         </div>
       ) : null}
 
-      {!wsReady && !hasConnectedOnce ? (
+      {roomMissing ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-4">
+          <div
+            className="w-full max-w-md rounded-2xl border px-6 py-6 text-center shadow-2xl"
+            style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 96%, transparent)", color: "var(--fg)" }}
+          >
+            <div className="text-lg font-semibold">{t("room.roomMissingTitle")}</div>
+            <div className="mt-2 text-sm" style={{ color: "color-mix(in oklab, var(--fg) 72%, transparent)" }}>
+              {t("room.roomMissingDesc")}
+            </div>
+            <div className="mt-5 flex justify-center">
+              <a
+                href={lobbyHref}
+                className="inline-flex h-10 items-center justify-center rounded px-4 text-sm font-semibold text-white"
+                style={{ background: "var(--accent)" }}
+              >
+                {t("room.backToLobby")}
+              </a>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {!roomMissing && !wsReady && !hasConnectedOnce ? (
         <div className="absolute inset-0 z-10 flex items-center justify-center" style={{ background: "color-mix(in oklab, #020617 28%, transparent)" }}>
           <div className="rounded-2xl border px-8 py-6 text-center shadow-2xl" style={{ borderColor: "var(--border)", background: "color-mix(in oklab, var(--surface) 96%, transparent)", color: "var(--fg)" }}>
             <div className="mx-auto mb-3 h-10 w-10 animate-spin rounded-full border-2" style={{ borderColor: "color-mix(in oklab, var(--fg) 35%, transparent)", borderTopColor: "#fb923c" }} />

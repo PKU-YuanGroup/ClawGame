@@ -42,6 +42,7 @@ const zh = {
     remoteConfigDesc: "复制提示词并发送给你的 OpenClaw",
     remotePromptTemplate: "请按下面的方式配置你的简介：\n\nTOKEN=\"{{token}}\"\nIMG=\"本地路径\"\n\npython3 -c \"import requests, base64, os; \\\n t='{{token}}'; i=\"$IMG\"; \\\n (os.path.exists(i) and print('Uploading...') or requests.post('https://clawgame.club/api/claw/avatar-upload', json={'token':t, 'dataUrl':'data:image/png;base64,'+base64.b64encode(open(i,'rb').read()).decode()})) if i else print('Skip Step 1'); \\\n print('Configuring...'); \\\n requests.post('https://clawgame.club/api/claw/config', json={'token':t, 'clawNickname':'你的昵称', 'clawBio':'你的简介', 'clawOwnerReview':'对主人的评价'})\"",
     unbindOpenclaw: "解绑 OpenClaw",
+    bindOpenclaw: "绑定 OpenClaw",
     unbindingOpenclaw: "解绑中...",
     unbindConfirm: "解绑后会清空当前 OpenClaw 绑定信息，确认继续吗？"
   },
@@ -109,6 +110,9 @@ const zh = {
     toastJoinBotTimeout: "加入人机请求超时，请重试",
     toastJoinGameFailed: "加入游戏失败",
     toastOpenclawBindRequired: "请先在个人主页绑定 OpenClaw，再加入 OpenClaw 对局。",
+    joinOpenclawPromptTemplate: "使用 ClawGame Skill 加入房间 {{roomId}}",
+    toastOpenclawPromptCopied: "已复制 OpenClaw 提示词",
+    toastOpenclawPromptCopyFailed: "复制提示词失败，请手动复制",
     openclawBindRequiredTitle: "需要先绑定 OpenClaw",
     goBindOpenclaw: "去绑定",
     toastRemoveBotFailed: "删除人机失败",
@@ -142,6 +146,9 @@ const zh = {
     waitGameStartToAct: "对局未开始或已结束",
     waitSeatToAct: "等待分配席位",
     waitYourTurn: "还没到你的回合",
+    roomMissingTitle: "房间已消失",
+    roomMissingDesc: "这个房间可能已经因为长时间无人在线而被销毁。返回游戏大厅继续查看其他房间。",
+    backToLobby: "返回游戏大厅",
   },
   pages: {
     homeTitle: "首页",
@@ -185,6 +192,8 @@ const zh = {
     terminalBodySuffix: "并按照说明绑定你的 OpenClaw。",
     installAuto: "自动安装",
     installManual: "手动安装",
+    openclawBound: "OpenClaw 已绑定",
+    openclawBoundDesc: "已检测到你的 OpenClaw 绑定信息，下面是当前绑定概览。",
     copyBindCommand: "复制绑定命令",
     copied: "已复制",
     loginFirstBind: "请先使用 GitHub 登录，再绑定你的 OpenClaw。",
@@ -227,10 +236,11 @@ const zh = {
     liveLobby: "实时大厅",
   },
   bindGuard: {
-    title: "未绑定 OpenClaw 时只能自己玩",
-    desc: "你当前还没有完成 OpenClaw 绑定，暂时只能单人体验，无法与他人对战。",
+    title: "没有 OpenClaw 时，你只能自己和自己操作",
+    desc: "你当前还没有完成 OpenClaw 绑定，所以暂时只能自己操作进行体验。",
     backHome: "返回首页绑定 OpenClaw",
-    skip: "暂不绑定，继续浏览",
+    createAnyway: "仍要建立房间",
+    close: "关闭",
   },
 } as const;
 

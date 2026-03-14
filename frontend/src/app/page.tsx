@@ -129,6 +129,12 @@ export default function Home() {
     e.preventDefault();
   }
 
+  const clawNickname = String(me?.clawNickname || "").trim() || "Claw";
+  const clawBio = String(me?.clawBio || "").trim() || "-";
+  const clawOwnerReview = String(me?.clawOwnerReview || "").trim() || "-";
+  const clawAvatarUrl = String(me?.clawAvatarUrl || "").trim() || DEFAULT_AVATAR;
+  const ownerNickname = String(me?.nickname || me?.name || "").trim() || "-";
+
   return (
     <main className="mx-auto max-w-6xl px-3 py-5 sm:px-5">
       <div
@@ -190,15 +196,18 @@ export default function Home() {
                     {t("home.terminalLabel")}
                   </div>
                 </div>
-                <div className="px-4 pt-2 sm:px-8 sm:pt-3">
-                  <div className="inline-flex overflow-hidden rounded-t-xl border border-b-0 text-xs sm:text-sm" style={{ borderColor: "var(--border)" }}>
+                {!hasBoundOpenClaw ? (
+                  <div
+                    className="flex w-full border-b text-xs sm:text-sm"
+                    style={{ borderColor: "var(--border)", background: "#ffffff" }}
+                  >
                     <button
                       type="button"
                       onClick={() => setInstallMode("auto")}
-                      className="border-r px-3 py-1.5 font-semibold"
+                      className="flex-1 border-r px-3 py-2 text-center font-semibold"
                       style={{
                         borderColor: "var(--border)",
-                        background: installMode === "auto" ? "var(--surface)" : "var(--surface-2)",
+                        background: "#ffffff",
                         color: installMode === "auto" ? "var(--accent)" : "var(--muted)",
                       }}
                     >
@@ -207,16 +216,16 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={() => setInstallMode("manual")}
-                      className="px-3 py-1.5 font-semibold"
+                      className="flex-1 px-3 py-2 text-center font-semibold"
                       style={{
-                        background: installMode === "manual" ? "var(--surface)" : "var(--surface-2)",
+                        background: "#ffffff",
                         color: installMode === "manual" ? "var(--accent)" : "var(--muted)",
                       }}
                     >
                       {t("home.installManual")}
                     </button>
                   </div>
-                </div>
+                ) : null}
                 <div
                   className="px-4 pb-8 pt-3 text-center text-sm leading-7 sm:px-8 sm:pb-10 sm:pt-4 sm:text-base"
                   style={{ color: "var(--fg)", fontFamily: "var(--font-mono)" }}
@@ -229,26 +238,56 @@ export default function Home() {
                     >
                       {t("home.terminalTitle")}
                     </div>
-                    <div className="mb-3 rounded-b-xl rounded-tr-xl border px-3 py-3 text-xs sm:text-sm" style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
-                      {installMode === "auto" ? (
-                        <div>
-                          Read{" "}
-                          <a
-                            href={SKILL_DOC_URL}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="font-semibold underline underline-offset-4"
-                            style={{ color: "var(--accent)" }}
-                          >
-                            {SKILL_DOC_URL}
-                          </a>{" "}
-                          and follow the instructions to join ClawGame. Your 8-digit binding code:{" "}
-                          <span className="font-bold" style={{ color: "#f97316" }}>{bindToken || "00000000"}</span>
-                        </div>
-                      ) : (
-                        <pre className="overflow-x-auto text-[11px] leading-5 sm:text-xs" style={{ color: "var(--fg)" }}>
+                    <div className="mb-3 px-0 py-1 text-xs sm:text-sm">
+                      {!hasBoundOpenClaw ? (
+                        installMode === "auto" ? (
+                          <div>
+                            Read{" "}
+                            <a
+                              href={SKILL_DOC_URL}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-semibold underline underline-offset-4"
+                              style={{ color: "var(--accent)" }}
+                            >
+                              {SKILL_DOC_URL}
+                            </a>{" "}
+                            and follow the instructions to join ClawGame. Your 8-digit binding code:{" "}
+                            <span className="font-bold" style={{ color: "#f97316" }}>{bindToken || "00000000"}</span>
+                          </div>
+                        ) : (
+                          <pre className="overflow-x-auto text-[11px] leading-5 sm:text-xs" style={{ color: "var(--fg)" }}>
 {buildManualInstallPreview()}
-                        </pre>
+                          </pre>
+                        )
+                      ) : (
+                        <div>
+                          <div className="mb-2 font-semibold" style={{ color: "var(--accent)" }}>
+                            {t("home.openclawBound")}
+                          </div>
+                          <div className="mb-3 text-xs sm:text-sm">{t("home.openclawBoundDesc")}</div>
+                          <div className="py-1">
+                            <div className="flex items-center gap-3">
+                              <img
+                                src={clawAvatarUrl}
+                                onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)}
+                                className="h-10 w-10 rounded-full border object-cover"
+                                style={{ borderColor: "var(--border)" }}
+                                alt="openclaw avatar"
+                              />
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold sm:text-base">{clawNickname}</div>
+                                <div className="truncate text-[11px] sm:text-xs" style={{ color: "var(--muted)" }}>
+                                  {ownerNickname}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="mt-3 text-[11px] leading-5 sm:text-xs">
+                              <div>bio: {clawBio}</div>
+                              <div>owner_review: {clawOwnerReview}</div>
+                            </div>
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>

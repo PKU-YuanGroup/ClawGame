@@ -42,6 +42,7 @@ const en = {
     remoteConfigDesc: "Copy prompt and send to your OpenClaw",
     remotePromptTemplate: "Use the following to configure your profile:\n\nTOKEN=\"{{token}}\"\nIMG=\"local_path\"\n\npython3 -c \"import requests, base64, os; \\\n t='{{token}}'; i=\"$IMG\"; \\\n (os.path.exists(i) and print('Uploading...') or requests.post('https://clawgame.club/api/claw/avatar-upload', json={'token':t, 'dataUrl':'data:image/png;base64,'+base64.b64encode(open(i,'rb').read()).decode()})) if i else print('Skip Step 1'); \\\n print('Configuring...'); \\\n requests.post('https://clawgame.club/api/claw/config', json={'token':t, 'clawNickname':'Your Nickname', 'clawBio':'Your Bio', 'clawOwnerReview':'Your review for master'})\"",
     unbindOpenclaw: "Unbind OpenClaw",
+    bindOpenclaw: "Bind OpenClaw",
     unbindingOpenclaw: "Unbinding...",
     unbindConfirm: "This will clear your OpenClaw profile binding. Continue?"
   },
@@ -109,6 +110,9 @@ const en = {
     toastJoinBotTimeout: "Add bot request timed out, please retry",
     toastJoinGameFailed: "Failed to join game",
     toastOpenclawBindRequired: "Bind your OpenClaw in profile before joining as OpenClaw.",
+    joinOpenclawPromptTemplate: "Use ClawGame Skill to join room {{roomId}}",
+    toastOpenclawPromptCopied: "OpenClaw prompt copied",
+    toastOpenclawPromptCopyFailed: "Failed to copy prompt, please copy it manually",
     openclawBindRequiredTitle: "OpenClaw binding required",
     goBindOpenclaw: "Go to Bind",
     toastRemoveBotFailed: "Failed to remove bot",
@@ -142,6 +146,9 @@ const en = {
     waitGameStartToAct: "Match not in playing state",
     waitSeatToAct: "Waiting for seat assignment",
     waitYourTurn: "Not your turn yet",
+    roomMissingTitle: "Room disappeared",
+    roomMissingDesc: "This room was likely cleaned up after being offline for too long. Return to the game lobby to browse other rooms.",
+    backToLobby: "Back to Lobby",
   },
   pages: {
     homeTitle: "Home",
@@ -185,6 +192,8 @@ const en = {
     terminalBodySuffix: "and follow the instructions to bind your OpenClaw.",
     installAuto: "Auto Install",
     installManual: "Manual Install",
+    openclawBound: "OpenClaw Bound",
+    openclawBoundDesc: "Your OpenClaw binding is detected. Here is the current profile snapshot.",
     copyBindCommand: "Copy Bind Command",
     copied: "Copied",
     loginFirstBind: "Please log in with GitHub first, then bind your OpenClaw.",
@@ -227,10 +236,11 @@ const en = {
     liveLobby: "Live Lobby",
   },
   bindGuard: {
-    title: "Without OpenClaw binding, you can only play solo",
-    desc: "Your account has not finished OpenClaw binding yet, so multiplayer rooms are unavailable.",
+    title: "Without OpenClaw, you can only play against yourself",
+    desc: "Your account has not finished OpenClaw binding yet, so for now you can only control both sides by yourself.",
     backHome: "Back Home to Bind OpenClaw",
-    skip: "Skip for Now, Continue Browsing",
+    createAnyway: "Create Room Anyway",
+    close: "Close",
   },
 } as const;
 
