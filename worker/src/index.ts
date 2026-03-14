@@ -521,6 +521,8 @@ export default {
           return normalizeParticipantId(id) !== myParticipantId;
         });
         const opponentOpenclaw = opponent ? players.find((p: any) => p?.id === `openclaw:${opponent.id}`) : null;
+        const normalizedStatus = String(state?.state?.status || "waiting");
+        const pollTimeoutsMs = agentPollTimeoutsForGame(String(state?.gameType || ""));
 
         return json({
           protocolVersion: "v1",
@@ -528,8 +530,12 @@ export default {
           gameType: state?.gameType || null,
           seat: me?.seat || joinData?.seat || null,
           playerToken: joinData?.playerToken || null,
-          status: state?.state?.status || "waiting",
+          status: normalizedStatus,
           rules: getGameRules(String(state?.gameType || ""), AGENT_EVENT_TYPES),
+          pollConfig: {
+            gameStarted: normalizedStatus === "playing" || normalizedStatus === "finished",
+            pollTimeoutsMs,
+          },
           players: {
             me: {
               id: myPlayerId,
@@ -546,7 +552,7 @@ export default {
                 }
               : null,
           },
-          ready: state?.state?.status === "playing",
+          ready: normalizedStatus === "playing",
         });
       }
 
@@ -911,6 +917,18 @@ export default {
         return passthrough(await stub.fetch("https://room/chat"));
       }
 
+      if (request.method === "POST" && url.pathname === "/api/room/presence") {
+        const me = await requireUser(request, env);
+        const body = (await request.json()) as { roomId?: string };
+        const roomId = String(body?.roomId || "").trim();
+        if (!roomId) return json({ error: "roomId is required" }, 400);
+        const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(roomId));
+        return passthrough(await stub.fetch("https://room/presence/touch", {
+          method: "POST",
+          body: JSON.stringify({ userId: me.userId }),
+        }));
+      }
+
       if (request.method === "POST" && url.pathname === "/api/room/chat") {
         const body = (await request.json()) as { roomId: string; senderType: "user" | "openclaw" | "spectator"; senderId: string; text: string };
         if (!body.roomId) return json({ error: "roomId is required" }, 400);
@@ -977,6 +995,23 @@ export default {
 const ROOM_ID_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_ID_LENGTH = 8;
 const DEFAULT_ROOM_OWNER_ID = "clawgame";
+const DEFAULT_AGENT_POLL_TIMEOUTS_MS = { waiting: 8000, playing: 8000, finished: 4000 } as const;
+const AGENT_POLL_TIMEOUTS_BY_GAME: Record<string, { waiting: number; playing: number; finished: number }> = {
+  gomoku: { waiting: 8000, playing: 8000, finished: 4000 },
+  go: { waiting: 9000, playing: 9000, finished: 4000 },
+  chess: { waiting: 9000, playing: 9000, finished: 4000 },
+  xiangqi: { waiting: 9000, playing: 9000, finished: 4000 },
+  texas_holdem: { waiting: 7000, playing: 7000, finished: 4000 },
+  werewolf: { waiting: 7000, playing: 7000, finished: 4000 },
+  junqi: { waiting: 9000, playing: 9000, finished: 4000 },
+  who_is_undercover: { waiting: 7000, playing: 7000, finished: 4000 },
+  guandan: { waiting: 8000, playing: 8000, finished: 4000 },
+};
+
+function agentPollTimeoutsForGame(gameType: string): { waiting: number; playing: number; finished: number } {
+  const key = String(gameType || "").trim();
+  return AGENT_POLL_TIMEOUTS_BY_GAME[key] || DEFAULT_AGENT_POLL_TIMEOUTS_MS;
+}
 
 function randomRoomId(): string {
   let value = "";

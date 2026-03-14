@@ -215,6 +215,29 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   }, [me?.id]);
 
   useEffect(() => {
+    if (!roomId || !me?.id) return;
+    let stopped = false;
+    const touch = async () => {
+      try {
+        await api("/api/room/presence", {
+          method: "POST",
+          body: JSON.stringify({ roomId }),
+        });
+      } catch {
+        // Best effort only.
+      }
+    };
+    void touch();
+    const timer = window.setInterval(() => {
+      if (!stopped) void touch();
+    }, 10000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [roomId, me?.id]);
+
+  useEffect(() => {
     if (!roomId || !meChecked) return;
     let cancelled = false;
     let w: WebSocket | null = null;

@@ -62,10 +62,13 @@ interface WsMeta {
   viewerId?: string;
 }
 
+const PARTICIPANT_PRESENCE_TTL_MS = 30_000;
+
 export class GameRoomDO {
   private sockets = new Map<WebSocket, WsMeta>();
   private seq = 0;
   private botLoopRunning = false;
+  private participantPresenceSeenAt = new Map<string, number>();
 
   constructor(private state: DurableObjectState, private env: Env) {}
 
@@ -85,6 +88,7 @@ export class GameRoomDO {
       if (request.method === "POST" && url.pathname === "/room/reset") return await this.resetRoom(request);
       if (request.method === "POST" && url.pathname === "/room/leave") return await this.leaveRoomByRequester(request);
       if (request.method === "POST" && url.pathname === "/room/join-bot") return await this.joinBotByRequester(request);
+      if (request.method === "POST" && url.pathname === "/presence/touch") return await this.touchParticipantPresence(request);
       if (request.method === "GET" && url.pathname === "/state") return await this.stateView();
       if (request.method === "GET" && url.pathname === "/online") return await this.onlineView();
       if (request.method === "GET" && url.pathname === "/chat") return await this.chatList();
@@ -958,11 +962,13 @@ export class GameRoomDO {
 
   private isParticipantOnlineInRoom(data: RoomData, participantId: string): boolean {
     if (!participantId) return false;
+    this.cleanupParticipantPresence();
 
     const online = this.currentOnline(data);
     const userOnline = online.users.some((u) => this.normalizeParticipantId(String(u.id || "")) === participantId);
     const spectatorOnline = online.spectators.some((u) => this.normalizeParticipantId(String(u.id || "")) === participantId);
     if (userOnline || spectatorOnline) return true;
+    if (this.participantPresenceSeenAt.has(participantId)) return true;
 
     // Fallback: explicit socket metadata check for racey snapshots.
     return Array.from(this.sockets.values()).some((meta) => {
@@ -978,9 +984,32 @@ export class GameRoomDO {
     });
   }
 
+  private cleanupParticipantPresence(): void {
+    const now = Date.now();
+    for (const [participantId, ts] of this.participantPresenceSeenAt.entries()) {
+      if (now - ts > PARTICIPANT_PRESENCE_TTL_MS) {
+        this.participantPresenceSeenAt.delete(participantId);
+      }
+    }
+  }
+
+  private async touchParticipantPresence(request: Request): Promise<Response> {
+    const body = (await request.json().catch(() => ({}))) as { userId?: string };
+    const userId = String(body.userId || "").trim();
+    if (!userId) throw new Error("userId is required");
+    const participantId = this.normalizeParticipantId(userId);
+    if (!participantId || participantId.startsWith("guest")) throw new Error("invalid userId");
+    this.cleanupParticipantPresence();
+    this.participantPresenceSeenAt.set(participantId, Date.now());
+    return json({ ok: true, userId: participantId, ttlMs: PARTICIPANT_PRESENCE_TTL_MS });
+  }
+
   private async removePlayerById(data: RoomData, playerId: string): Promise<boolean> {
-    const existed = data.players.some((p) => p.id === playerId);
+    const leavingPlayer = data.players.find((p) => p.id === playerId);
+    const existed = Boolean(leavingPlayer);
     if (!existed) return false;
+    const wasPlaying = String((data.state as any)?.status || "") === "playing";
+    const leavingSeat = String(leavingPlayer?.seat || "");
 
     const participantId = this.normalizeParticipantId(playerId);
     data.players = data.players.filter((p) => p.id !== playerId);
@@ -998,9 +1027,26 @@ export class GameRoomDO {
       this.sockets.set(socket, socketMeta);
     }
 
+    if (wasPlaying && leavingSeat) {
+      const state: any = data.state as any;
+      state.status = "finished";
+      state.winner = this.getOpponentSeat(data, leavingSeat) || "draw";
+      state.finishReason = "player_left";
+      this.markDefaultRoomAutoReset(data);
+      data.rematch = { votes: {}, closed: false };
+      const systemMsg = this.addSystemChat(data, `${leavingSeat} left the room. ${state.winner} wins.`);
+      if (systemMsg) this.broadcast(data, "chat", systemMsg);
+      this.broadcast(data, "game_over", {
+        winner: state.winner,
+        reason: "player_left",
+        moveCount: Number(state.moveCount || 0),
+      });
+      this.moveAllPlayersToSpectators(data);
+    }
+
     const readyParticipants = this.readyParticipantCount(data);
     const hasRequiredNonHuman = this.hasOpenclawOrBotParticipant(data);
-    if (readyParticipants < this.gameMinParticipants(data.gameType) || !hasRequiredNonHuman) {
+    if (!wasPlaying && (readyParticipants < this.gameMinParticipants(data.gameType) || !hasRequiredNonHuman)) {
       (data.state as any).status = "waiting";
       this.clearFinishedMarkers(data.state as any);
     }
@@ -1021,8 +1067,13 @@ export class GameRoomDO {
 
   private async removeParticipantById(data: RoomData, participantPlayerId: string): Promise<boolean> {
     const participantId = this.normalizeParticipantId(participantPlayerId);
+    const leavingSeats = data.players
+      .filter((p) => this.normalizeParticipantId(p.id) === participantId)
+      .map((p) => String(p.seat || ""))
+      .filter(Boolean);
     const existed = data.players.some((p) => this.normalizeParticipantId(p.id) === participantId);
     if (!existed) return false;
+    const wasPlaying = String((data.state as any)?.status || "") === "playing";
 
     data.players = data.players.filter((p) => this.normalizeParticipantId(p.id) !== participantId);
     if (!data.rematch) data.rematch = { votes: {}, closed: false };
@@ -1036,9 +1087,27 @@ export class GameRoomDO {
       this.sockets.set(socket, socketMeta);
     }
 
+    if (wasPlaying && leavingSeats.length > 0) {
+      const state: any = data.state as any;
+      const primarySeat = leavingSeats[0];
+      state.status = "finished";
+      state.winner = this.getOpponentSeat(data, primarySeat) || "draw";
+      state.finishReason = "player_left";
+      this.markDefaultRoomAutoReset(data);
+      data.rematch = { votes: {}, closed: false };
+      const systemMsg = this.addSystemChat(data, `${primarySeat} left the room. ${state.winner} wins.`);
+      if (systemMsg) this.broadcast(data, "chat", systemMsg);
+      this.broadcast(data, "game_over", {
+        winner: state.winner,
+        reason: "player_left",
+        moveCount: Number(state.moveCount || 0),
+      });
+      this.moveAllPlayersToSpectators(data);
+    }
+
     const readyParticipants = this.readyParticipantCount(data);
     const hasRequiredNonHuman = this.hasOpenclawOrBotParticipant(data);
-    if (readyParticipants < this.gameMinParticipants(data.gameType) || !hasRequiredNonHuman) {
+    if (!wasPlaying && (readyParticipants < this.gameMinParticipants(data.gameType) || !hasRequiredNonHuman)) {
       (data.state as any).status = "waiting";
       this.clearFinishedMarkers(data.state as any);
     }
