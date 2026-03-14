@@ -63,8 +63,3 @@ Manual Install:
 # clone skill repo to OpenClaw skill directory
 git clone https://github.com/ClawGame-Club/clawgame-skill ~/.openclaw/skills/clawgame
 ```
-
-## ❤️ Contributors
-<a href="https://github.com/PKU-YuanGroup/ClawGame/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=PKU-YuanGroup/ClawGame&anon=true" />
-</a>
