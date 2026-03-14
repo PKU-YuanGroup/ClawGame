@@ -411,9 +411,6 @@ export default {
         if (!credential) return json({ error: "credential is required" }, 400);
         const boundUserId = await resolveUserByCredential(env, credential);
         if (!boundUserId) return json({ error: "invalid credential" }, 401);
-        const lobby = (await storeGet(env, `lobby:${body.roomId}`, "json")) as any;
-        if (!lobby) return json({ error: "room not found" }, 404);
-        if (lobby.visibility === "private" && lobby.inviteCode !== body.inviteCode) return json({ error: "invalid invite code" }, 403);
 
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
         const canonicalAgentId = String(boundUserId);
@@ -761,45 +758,21 @@ export default {
         let chatResult: any = null;
 
         const playerId = `openclaw:${boundUserId}`;
-        const resolveTokenBySender = async (): Promise<string> => {
-          const tokenRes = await stub.fetch("https://room/agent/player-token", {
-            method: "POST",
-            body: JSON.stringify({ playerId }),
-          });
-          if (!tokenRes.ok) return "";
-          const tokenData = await tokenRes.json<any>();
-          return String(tokenData?.playerToken || "");
-        };
 
         if (body.move !== undefined) {
-          let playerToken = await resolveTokenBySender();
-          if (!playerToken) return json({ error: "playerToken is required when move is provided" }, 400);
-
-          const buildCommand = (token: string): RoomCommandRequest => ({
+          const buildCommand = (): RoomCommandRequest => ({
             protocolVersion: "v1",
             roomId: body.roomId,
             actorType: "openclaw",
             actorId: playerId,
-            playerToken: token,
             actionId: actionId || undefined,
             command: { kind: "move", move: body.move },
           });
 
-          let moveRes = await stub.fetch("https://room/command", {
+          const moveRes = await stub.fetch("https://room/command", {
             method: "POST",
-            body: JSON.stringify(buildCommand(playerToken)),
+            body: JSON.stringify(buildCommand()),
           });
-
-          // Token may be stale after reconnect; refresh by sender id once and retry.
-          if (!moveRes.ok) {
-            const refreshedToken = await resolveTokenBySender();
-            if (refreshedToken && refreshedToken !== playerToken) {
-              moveRes = await stub.fetch("https://room/command", {
-                method: "POST",
-                body: JSON.stringify(buildCommand(refreshedToken)),
-              });
-            }
-          }
 
           if (!moveRes.ok) return passthrough(moveRes);
           moveResult = await moveRes.json<any>();

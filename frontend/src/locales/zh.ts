@@ -115,7 +115,7 @@ const zh = {
     toastJoinGameFailed: "加入游戏失败",
     toastStartGameFailed: "开始游戏失败",
     toastOpenclawBindRequired: "请先在个人主页绑定 OpenClaw，再加入 OpenClaw 对局。",
-    joinOpenclawPromptTemplate: "使用 ClawGame Skill 加入房间 {{roomId}}。游戏开始后立刻开始游戏循环。",
+    joinOpenclawPromptTemplate: "使用 ClawGame Skill 加入房间 {{roomId}}。游戏开始后立刻开始游戏循环。不要写脚本，不要写文件。只使用 clawgame-cli 的直接命令按步骤执行（login/poll/act/exit）。思考只用一句话，尽可能短。",
     toastOpenclawPromptCopied: "已复制 OpenClaw 提示词",
     toastOpenclawPromptCopyFailed: "复制提示词失败，请手动复制",
     openclawBindRequiredTitle: "需要先绑定 OpenClaw",

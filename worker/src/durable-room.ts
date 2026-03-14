@@ -515,7 +515,7 @@ export class GameRoomDO {
         data.agentLastSeenAt = undefined;
       }
 
-      if (data.players.length === 0 && !data.persistent) {
+      if (data.players.length === 0 && !data.persistent && this.sockets.size === 0) {
         // Keep an empty room snapshot for connected spectators; cleanup runs when sockets drain.
         await storeDelete(this.env, `lobby:${data.roomId}`);
       }
@@ -976,11 +976,6 @@ export class GameRoomDO {
       throw new Error("Invalid invite code");
     }
     const participantId = this.normalizeParticipantId(playerId);
-    if (playerId.startsWith("openclaw:")) {
-      if (!this.isParticipantOnlineInRoom(data, participantId)) {
-        throw new Error("owner must be online in room (player or spectator)");
-      }
-    }
 
     const existed = data.players.find((p) => p.id === playerId);
     if (existed) {
@@ -1081,7 +1076,9 @@ export class GameRoomDO {
     const leavingPlayer = data.players.find((p) => p.id === playerId);
     const existed = Boolean(leavingPlayer);
     if (!existed) return false;
-    const wasPlaying = String((data.state as any)?.status || "") === "playing";
+    const currentStatus = String((data.state as any)?.status || "");
+    const wasPlaying = currentStatus === "playing";
+    const wasFinished = currentStatus === "finished";
     const leavingSeat = String(leavingPlayer?.seat || "");
 
     const participantId = this.normalizeParticipantId(playerId);
@@ -1133,7 +1130,7 @@ export class GameRoomDO {
 
     const readyParticipants = this.readyParticipantCount(data);
     const hasRequiredNonHuman = this.hasOpenclawOrBotParticipant(data);
-    if (!wasPlaying && (readyParticipants < this.gameMinParticipants(data.gameType) || !hasRequiredNonHuman)) {
+    if (!wasPlaying && !wasFinished && (readyParticipants < this.gameMinParticipants(data.gameType) || !hasRequiredNonHuman)) {
       (data.state as any).status = "waiting";
       this.clearFinishedMarkers(data.state as any);
     }
@@ -1141,7 +1138,7 @@ export class GameRoomDO {
       data.agentLastSeenAt = undefined;
     }
 
-    if (data.players.length === 0 && !data.persistent) {
+    if (data.players.length === 0 && !data.persistent && this.sockets.size === 0) {
       // Keep an empty room snapshot for connected spectators; cleanup runs when sockets drain.
       await storeDelete(this.env, `lobby:${data.roomId}`);
     }
@@ -1160,7 +1157,9 @@ export class GameRoomDO {
       .filter(Boolean);
     const existed = data.players.some((p) => this.normalizeParticipantId(p.id) === participantId);
     if (!existed) return false;
-    const wasPlaying = String((data.state as any)?.status || "") === "playing";
+    const currentStatus = String((data.state as any)?.status || "");
+    const wasPlaying = currentStatus === "playing";
+    const wasFinished = currentStatus === "finished";
 
     data.players = data.players.filter((p) => this.normalizeParticipantId(p.id) !== participantId);
     if (!data.rematch) data.rematch = { votes: {}, closed: false };
@@ -1210,7 +1209,7 @@ export class GameRoomDO {
 
     const readyParticipants = this.readyParticipantCount(data);
     const hasRequiredNonHuman = this.hasOpenclawOrBotParticipant(data);
-    if (!wasPlaying && (readyParticipants < this.gameMinParticipants(data.gameType) || !hasRequiredNonHuman)) {
+    if (!wasPlaying && !wasFinished && (readyParticipants < this.gameMinParticipants(data.gameType) || !hasRequiredNonHuman)) {
       (data.state as any).status = "waiting";
       this.clearFinishedMarkers(data.state as any);
     }
@@ -1223,7 +1222,7 @@ export class GameRoomDO {
       data.ownerId = nextOwner?.id;
     }
 
-    if (data.players.length === 0 && !data.persistent) {
+    if (data.players.length === 0 && !data.persistent && this.sockets.size === 0) {
       // Keep an empty room snapshot for connected spectators; cleanup runs when sockets drain.
       await storeDelete(this.env, `lobby:${data.roomId}`);
     }
@@ -1487,6 +1486,7 @@ export class GameRoomDO {
     this.clearDefaultRoomAutoReset(data);
     data.players = [];
     data.rematch = { votes: {}, closed: false };
+    data.eventSeq = (data.eventSeq || 0) + 1;
 
     for (const [ws, meta] of this.sockets.entries()) {
       meta.role = "spectator";
@@ -1710,9 +1710,17 @@ export class GameRoomDO {
 
     if (kind === "move") {
       const playerToken = String(payload?.playerToken || "").trim();
-      if (!playerToken) throw new Error("playerToken is required");
-      const player = data.players.find((p) => p.token === playerToken);
-      if (!player) throw new Error("Invalid token");
+      const actorId = String(payload?.actorId || "").trim();
+      let player: MatchPlayer | undefined;
+      if (playerToken) {
+        player = data.players.find((p) => p.token === playerToken);
+        if (!player) throw new Error("Invalid token");
+      } else if (actorId) {
+        player = data.players.find((p) => p.id === actorId);
+        if (!player) throw new Error("actor not in room");
+      } else {
+        throw new Error("playerToken or actorId is required");
+      }
       const result = await this.applyMoveCommand(data, player, payload?.command?.move, payload?.actionId);
       return json(result);
     }

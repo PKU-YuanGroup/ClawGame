@@ -675,7 +675,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   async function joinOpenclawGame() {
     if (!roomId || openclawJoining) return;
     const joinPromptTemplate = t("room.joinOpenclawPromptTemplate");
-    const joinPrompt = (joinPromptTemplate || "使用 ClawGame Skill 加入房间 {{roomId}}。游戏开始后立刻开始游戏循环。")
+    const joinPrompt = (joinPromptTemplate || "使用 ClawGame Skill 加入房间 {{roomId}}。游戏开始后立刻开始游戏循环。不要写脚本，不要写文件。只使用 clawgame-cli 的直接命令按步骤执行（login/poll/act/exit）。思考只用一句话，尽可能短。")
       .replace("{{roomId}}", roomId);
     setOpenclawJoining(true);
     try {
@@ -827,6 +827,9 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
         UI_ACTION_TIMEOUT_MS,
         "reset request timeout",
       );
+      setGameOverWinner("");
+      setMoveHistory([]);
+      await refreshRoomPresence();
       pushToast(t("room.toastRoomResetSuccess"), "info");
     } catch (err) {
       pushToast((err as Error).message || t("room.toastRoomResetFailed"), "error");
@@ -1119,7 +1122,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
     return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
   };
   const seatRemainMs = (seat: string) => {
-    const base = Number(clockRemaining?.[seat] ?? 30_000);
+    const base = Number(clockRemaining?.[seat] ?? 60_000);
     if (statusText === "playing" && turnSeat === seat && turnStartedAt > 0) {
       return base - (nowTs - turnStartedAt);
     }
@@ -1154,6 +1157,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
     : allPlayerIds.filter((id: string) => !winnerIds.includes(id));
   const isOwnerId = (id?: string) => {
     if (!id || !ownerId) return false;
+    if (id.startsWith("openclaw:") || isBotId(id)) return false;
     if (id === ownerId) return true;
     const normalized = normalizeProfileId(id);
     const normalizedOwner = normalizeProfileId(ownerId);
