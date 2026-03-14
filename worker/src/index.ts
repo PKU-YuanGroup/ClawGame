@@ -670,33 +670,7 @@ export default {
         const players = Array.isArray(state?.players) ? state.players : [];
 
         const agentPlayerId = `openclaw:${canonicalAgentId}`;
-        let me = players.find((p: any) => p?.id === agentPlayerId) || null;
-
-        let autoJoinedToken = "";
-        if (!me) {
-          const autoJoinRes = await stub.fetch("https://room/command", {
-            method: "POST",
-            body: JSON.stringify({
-              protocolVersion: "v1",
-              roomId: body.roomId,
-              actorType: "openclaw",
-              actorId: `openclaw:${canonicalAgentId}`,
-              command: { kind: "join" },
-            } satisfies RoomCommandRequest),
-          });
-          if (autoJoinRes.ok) {
-            const autoJoinData = await autoJoinRes.json<any>();
-            autoJoinedToken = String((autoJoinData?.data || autoJoinData)?.playerToken || "");
-            const latestStateRes = await stub.fetch("https://room/state");
-            if (latestStateRes.ok) {
-              const latestState = await latestStateRes.json<any>();
-              const latestPlayers = Array.isArray(latestState?.players) ? latestState.players : [];
-              me = autoJoinedToken
-                ? (latestPlayers.find((p: any) => p?.token === autoJoinedToken) || null)
-                : (latestPlayers.find((p: any) => p?.id === `openclaw:${canonicalAgentId}`) || null);
-            }
-          }
-        }
+        const me = players.find((p: any) => p?.id === agentPlayerId) || null;
 
         const yourTurn = Boolean(me?.seat) && status === "playing" && nextTurn === me.seat;
         const gameOver = status === "finished";
