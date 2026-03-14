@@ -156,7 +156,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/api/lobby/public") {
-        await ensureDefaultPublicRooms(env);
+        await removeDefaultLobbyRooms(env);
         const gameType = url.searchParams.get("gameType");
         const list = await storeList(env, { prefix: "lobby:" });
         const rooms = await Promise.all(list.keys.map(async (k) => (await storeGet(env, k.name, "json")) as any));
@@ -164,7 +164,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/api/lobby/overview") {
-        await ensureDefaultPublicRooms(env);
+        await removeDefaultLobbyRooms(env);
         const gameType = String(url.searchParams.get("gameType") || "gomoku");
         const [rooms, leaderboard] = await Promise.all([
           buildLobbyOverview(request, env, gameType),
@@ -174,7 +174,7 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/api/matches/live") {
-        await ensureDefaultPublicRooms(env);
+        await removeDefaultLobbyRooms(env);
         const gameType = url.searchParams.get("gameType");
         const list = await storeList(env, { prefix: "lobby:" });
         const rooms = await Promise.all(
@@ -846,22 +846,7 @@ export default {
         const roomId = url.searchParams.get("roomId");
         if (!roomId) return json({ error: "roomId is required" }, 400);
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(roomId));
-        if (roomId.startsWith("DEFAULT-")) {
-          await stub.fetch("https://room/room/ensure-default", {
-            method: "POST",
-            body: JSON.stringify({ ownerId: DEFAULT_ROOM_OWNER_ID }),
-          });
-        }
         return passthrough(await stub.fetch("https://room/state"));
-      }
-
-      if (request.method === "POST" && url.pathname === "/api/room/default-reset") {
-        const body = (await request.json()) as { roomId?: string };
-        const roomId = String(body?.roomId || "").trim();
-        if (!roomId) return json({ error: "roomId is required" }, 400);
-        if (!roomId.startsWith("DEFAULT-")) return json({ error: "only DEFAULT-* room is supported" }, 400);
-        const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(roomId));
-        return passthrough(await stub.fetch("https://room/room/default-reset", { method: "POST" }));
       }
 
       if (request.method === "GET" && url.pathname === "/api/room/online") {
@@ -955,7 +940,6 @@ export default {
 
 const ROOM_ID_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_ID_LENGTH = 8;
-const DEFAULT_ROOM_OWNER_ID = "clawgame";
 const DEFAULT_AGENT_POLL_TIMEOUTS_MS = { waiting: 8000, playing: 8000, finished: 4000 } as const;
 const AGENT_POLL_TIMEOUTS_BY_GAME: Record<string, { waiting: number; playing: number; finished: number }> = {
   gomoku: { waiting: 8000, playing: 8000, finished: 4000 },
@@ -992,61 +976,18 @@ async function allocateRoomId(env: Env): Promise<string> {
   throw new Error("failed to allocate room id");
 }
 
-function defaultRoomIdForGame(gameType: string): string {
-  return `DEFAULT-${gameType}`;
-}
-
-async function ensureDefaultPublicRoom(env: Env, gameType: string): Promise<void> {
-  const roomId = defaultRoomIdForGame(gameType);
-  const lobbyKey = `lobby:${roomId}`;
-  const current = (await storeGet(env, lobbyKey, "json")) as any;
-  const alreadyReady = Boolean(
-    current
-      && current.roomId === roomId
-      && current.gameType === gameType
-      && current.visibility === "public"
-      && current.persistent,
-  );
-  if (alreadyReady) return;
-
-  const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(roomId));
-  const initRes = await stub.fetch("https://room/init", {
-    method: "POST",
-    body: JSON.stringify({
-      roomId,
-      gameType,
-      creatorId: DEFAULT_ROOM_OWNER_ID,
-      visibility: "public",
-      persistent: true,
-    }),
-  });
-  if (!initRes.ok && initRes.status !== 409) {
-    const payload = await initRes.json<any>().catch(() => null);
-    throw new Error(payload?.error || `failed to ensure default room for ${gameType}`);
-  }
-  await stub.fetch("https://room/room/ensure-default", {
-    method: "POST",
-    body: JSON.stringify({ ownerId: DEFAULT_ROOM_OWNER_ID }),
-  });
-
-  await storePut(
-    env,
-    lobbyKey,
-    JSON.stringify({
-      roomId,
-      gameType,
-      ownerId: DEFAULT_ROOM_OWNER_ID,
-      visibility: "public",
-      persistent: true,
-      systemDefault: true,
-      createdAt: 0,
+async function removeDefaultLobbyRooms(env: Env): Promise<void> {
+  const list = await storeList(env, { prefix: "lobby:" });
+  await Promise.all(
+    list.keys.map(async (k) => {
+      const room = (await storeGet(env, k.name, "json")) as any;
+      const roomId = String(room?.roomId || "");
+      const isDefault = roomId.startsWith("DEFAULT-") || Boolean(room?.systemDefault);
+      if (isDefault) {
+        await storeDelete(env, k.name);
+      }
     }),
   );
-}
-
-async function ensureDefaultPublicRooms(env: Env): Promise<void> {
-  const gameTypes = listGameTypes();
-  await Promise.all(gameTypes.map((gameType) => ensureDefaultPublicRoom(env, gameType)));
 }
 
 async function sleep(ms: number): Promise<void> {
