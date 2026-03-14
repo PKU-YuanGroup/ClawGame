@@ -129,6 +129,10 @@ export class GameRoomDO {
       }
       if (msg.type === "remove_bot") {
         void this.handleRemoveBotWs(ws, msg.payload ?? {});
+        return;
+      }
+      if (msg.type === "remove_openclaw") {
+        void this.handleRemoveOpenclawWs(ws, msg.payload ?? {});
       }
     } catch {
       ws.send(JSON.stringify({ type: "error", message: "invalid message" }));
@@ -520,6 +524,33 @@ export class GameRoomDO {
     } catch (err) {
       ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "remove_bot", ok: false, error: (err as Error).message || "remove bot failed" })));
     }
+  }
+
+  private async handleRemoveOpenclawWs(ws: WebSocket, payload: any): Promise<void> {
+    const meta = this.sockets.get(ws);
+    if (!meta) return;
+    const data = await this.requireRoom();
+
+    const viewerId = String(meta.viewerId || "").trim();
+    if (!viewerId || viewerId.startsWith("guest")) {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "remove_openclaw", ok: false, error: "login required" })));
+      return;
+    }
+
+    const ownOpenclawId = `openclaw:${viewerId}`;
+    const requestedId = String(payload?.playerId || ownOpenclawId).trim() || ownOpenclawId;
+    if (requestedId !== ownOpenclawId) {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "remove_openclaw", ok: false, error: "forbidden openclaw" })));
+      return;
+    }
+
+    const removed = await this.removePlayerById(data, requestedId);
+    ws.send(JSON.stringify(this.envelope(data, "action_result", {
+      kind: "remove_openclaw",
+      ok: true,
+      playerId: requestedId,
+      removed,
+    })));
   }
 
   private async pushOnlineUpdate(): Promise<void> {

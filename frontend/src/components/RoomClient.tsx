@@ -136,6 +136,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const [leaving, setLeaving] = useState(false);
   const [botJoining, setBotJoining] = useState(false);
   const [botRemoving, setBotRemoving] = useState(false);
+  const [openclawRemoving, setOpenclawRemoving] = useState(false);
   const joinGameTimerRef = useRef<number | null>(null);
   const joinBotTimerRef = useRef<number | null>(null);
   const removeBotLockRef = useRef(false);
@@ -372,6 +373,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
             setOpenclawJoining(false);
             setBotJoining(false);
             setBotRemoving(false);
+            setOpenclawRemoving(false);
             removeBotLockRef.current = false;
             if (joinGameTimerRef.current) {
               window.clearTimeout(joinGameTimerRef.current);
@@ -429,6 +431,13 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
               void refreshRoomPresence();
               if (!payload.ok) {
                 pushToast(String(payload.error || t("room.toastRemoveBotFailed")), "error");
+              }
+            }
+            if (payload.kind === "remove_openclaw") {
+              setOpenclawRemoving(false);
+              void refreshRoomPresence();
+              if (!payload.ok) {
+                pushToast(String(payload.error || t("room.toastRemoveOpenclawFailed")), "error");
               }
             }
             if (payload?.ok && payload?.actor && payload?.move) {
@@ -812,6 +821,16 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
       void refreshRoomPresence();
     }, 6000);
     ws.send(JSON.stringify({ type: "remove_bot", payload: botId ? { botId } : {} }));
+  }
+
+  function removeMyOpenclaw() {
+    if (openclawRemoving) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      pushToast(t("room.toastWsNotConnected"), "error");
+      return;
+    }
+    setOpenclawRemoving(true);
+    ws.send(JSON.stringify({ type: "remove_openclaw" }));
   }
 
   function sendChat() {
@@ -1870,6 +1889,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
           {allPlayerEntries.map((u) => {
             const rowIsOwner = isOwnerId(u.id);
             const type = u.id.startsWith("openclaw:") ? "openclaw" : "user";
+            const canRemoveOwnOpenclaw = Boolean(myOpenclawId) && u.id === myOpenclawId;
             return (
               <div className="flex items-center gap-2 text-sm" key={`u_${u.id}`}>
                 <img src={avatarById(u.id, type)} onError={(e) => ((e.currentTarget as HTMLImageElement).src = DEFAULT_AVATAR)} className="h-7 w-7 cursor-pointer rounded-full border border-slate-700 object-cover" alt="avatar" onClick={() => openProfileCard(u.id, type)} />
@@ -1878,6 +1898,23 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
                   {rowIsOwner ? <span className="ml-1 inline-flex items-center rounded px-1 py-0.5 text-[10px] align-middle" style={{ background: "color-mix(in oklab, #f59e0b 22%, transparent)", color: "var(--fg)" }}>{t("room.owner")}</span> : null}
                   {rowIsOwner ? <span className="pointer-events-none absolute -top-6 left-0 rounded bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-200 opacity-0 transition group-hover:opacity-100">{t("room.owner")}</span> : null}
                 </span>
+                {canRemoveOwnOpenclaw ? (
+                  <button
+                    className="inline-flex h-6 w-6 items-center justify-center rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+                    onClick={removeMyOpenclaw}
+                    disabled={openclawRemoving}
+                    aria-label={openclawRemoving ? t("room.removingOpenclaw") : t("room.removeOpenclaw")}
+                    title={openclawRemoving ? t("room.removingOpenclaw") : t("room.removeOpenclaw")}
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M3 6h18" />
+                      <path d="M8 6V4h8v2" />
+                      <path d="M18 6l-1 14H7L6 6" />
+                      <path d="M10 11v6" />
+                      <path d="M14 11v6" />
+                    </svg>
+                  </button>
+                ) : null}
               </div>
             );
           })}
