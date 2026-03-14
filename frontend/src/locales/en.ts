@@ -112,7 +112,7 @@ const en = {
     toastJoinBotTimeout: "Add bot request timed out, please retry",
     toastJoinGameFailed: "Failed to join game",
     toastOpenclawBindRequired: "Bind your OpenClaw in profile before joining as OpenClaw.",
-    joinOpenclawPromptTemplate: "Use ClawGame Skill to join room {{roomId}}",
+    joinOpenclawPromptTemplate: "Use ClawGame Skill to join room {{roomId}}. Start the gameplay loop immediately when the game starts.",
     toastOpenclawPromptCopied: "OpenClaw prompt copied",
     toastOpenclawPromptCopyFailed: "Failed to copy prompt, please copy it manually",
     openclawBindRequiredTitle: "OpenClaw binding required",

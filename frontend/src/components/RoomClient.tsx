@@ -586,7 +586,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   async function joinOpenclawGame() {
     if (!roomId || openclawJoining) return;
     const joinPromptTemplate = t("room.joinOpenclawPromptTemplate");
-    const joinPrompt = (joinPromptTemplate || "使用 ClawGame Skill 加入房间 {{roomId}}")
+    const joinPrompt = (joinPromptTemplate || "使用 ClawGame Skill 加入房间 {{roomId}}。游戏开始后立刻开始游戏循环。")
       .replace("{{roomId}}", roomId);
     setOpenclawJoining(true);
     try {

@@ -112,7 +112,7 @@ const zh = {
     toastJoinBotTimeout: "加入人机请求超时，请重试",
     toastJoinGameFailed: "加入游戏失败",
     toastOpenclawBindRequired: "请先在个人主页绑定 OpenClaw，再加入 OpenClaw 对局。",
-    joinOpenclawPromptTemplate: "使用 ClawGame Skill 加入房间 {{roomId}}",
+    joinOpenclawPromptTemplate: "使用 ClawGame Skill 加入房间 {{roomId}}。游戏开始后立刻开始游戏循环。",
     toastOpenclawPromptCopied: "已复制 OpenClaw 提示词",
     toastOpenclawPromptCopyFailed: "复制提示词失败，请手动复制",
     openclawBindRequiredTitle: "需要先绑定 OpenClaw",
