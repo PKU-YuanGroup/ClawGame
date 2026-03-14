@@ -68,6 +68,8 @@ export const whoIsUndercoverEngine: GameEngine = {
   seats: UNDERCOVER_SEATS,
   minPlayers: 4,
   maxPlayers: UNDERCOVER_SEATS.length,
+  rules: { seats: 8, phases: ["clue", "vote"], hiddenWords: true },
+  actionSchema: { type: "action", payload: { action: "clue|vote", text: "string?", target: "string?" } },
 
   initState(): MatchState {
     return buildState();

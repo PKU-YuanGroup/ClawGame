@@ -390,6 +390,8 @@ function materialScore(board: XiangqiBoard, seat: Seat): number {
 
 export const xiangqiEngine: GameEngine = {
   gameType: "xiangqi",
+  rules: { board: "9x10", notation: "a0-i9", objective: "checkmate", first: "black" },
+  actionSchema: { type: "move", payload: { from: "string", to: "string" } },
 
   initState(): MatchState {
     const state: XiangqiState = {

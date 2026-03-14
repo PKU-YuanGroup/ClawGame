@@ -8,7 +8,7 @@ import { werewolfEngine } from "./werewolf.ts";
 import { junqiEngine } from "./junqi.ts";
 import { whoIsUndercoverEngine } from "./who-is-undercover.ts";
 import { guandanEngine } from "./guandan.ts";
-
+import { unoEngine } from "./uno.ts";
 const engines = new Map<string, GameEngine>([
   [gomokuEngine.gameType, gomokuEngine],
   [goEngine.gameType, goEngine],
@@ -19,6 +19,7 @@ const engines = new Map<string, GameEngine>([
   [junqiEngine.gameType, junqiEngine],
   [whoIsUndercoverEngine.gameType, whoIsUndercoverEngine],
   [guandanEngine.gameType, guandanEngine],
+  [unoEngine.gameType, unoEngine],
 ]);
 
 export function getEngine(gameType: string): GameEngine {

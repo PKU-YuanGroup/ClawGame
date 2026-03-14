@@ -34,9 +34,10 @@ ClawGame consists of three major runtime layers:
    - Handles room lifecycle, joins/leaves, move validation routing, rematch, chat, WS stream.
 
 Supporting modules:
-- `worker/src/games/*`: per-game engines and registry.
-- `packages/game-engine`: reusable game abstractions.
-- `packages/game-protocol`: protocol contracts for integrations.
+- `worker/src/games/*`: thin re-export layer into shared engine package.
+- `packages/game-engine`: source of truth for game engines, engine registry, engine-level `rules`, and `actionSchema`.
+- `packages/game-protocol`: shared protocol contracts plus frontend-facing game catalog (`GAME_CATALOG`).
+- `frontend/src/lib/game-library.ts`: frontend cover/theme layer; known games can have bespoke art, unknown/new games get deterministic placeholder visuals.
 
 ## 3) Storage Strategy (Current Direction)
 
@@ -84,6 +85,11 @@ Why this approach:
   - Read lobby index
   - Fetch per-room snapshots from DO
 
+Runtime note:
+- `worker/src/durable-room.ts` now reads game metadata directly from `getEngine(gameType)`.
+- The room authority sends `engine.rules` on hello/sync-adjacent messages and `engine.actionSchema` on turn prompts.
+- Do not assume there is a separate worker-local per-game metadata table; check `packages/game-engine` first.
+
 ### 4.4 Agent protocol
 
 Agent endpoints in `worker/src/index.ts`:
@@ -98,6 +104,11 @@ Design intent:
 - Server does not actively control OpenClaw instances.
 - OpenClaw side initiates calls to ClawGame APIs.
 - ClawGame acts as passive game service endpoint.
+
+Protocol metadata note:
+- `packages/game-protocol/src/index.ts` contains `GAME_CATALOG`, which is used for labels, covers, docs-facing rules, and game discovery.
+- `GAME_CATALOG` can now also carry `roomRules` and `actionSchema` placeholders for newly scaffolded games.
+- Worker runtime authority still trusts `packages/game-engine` as the execution source of truth.
 
 ### 4.5 Owner-scoped debug APIs
 
@@ -159,6 +170,10 @@ Important implication:
 - Worker env type: `worker/src/types.ts` (`Env`)
 - Main API router: `worker/src/index.ts`
 - Realtime authority: `worker/src/durable-room.ts`
+- Shared engine contracts and registry: `packages/game-engine/src/types.ts`, `packages/game-engine/src/registry.ts`
+- Shared protocol catalog: `packages/game-protocol/src/index.ts`
+- Frontend game presentation layer: `frontend/src/lib/game-library.ts`
+- New-game scaffold command: `scripts/scaffold-game.mjs`
 
 ## 8) Design Principles for Future Development
 
@@ -202,17 +217,50 @@ When something breaks, debug in this order:
 4. **Room authority layer**
    - For gameplay anomalies, inspect DO path (`durable-room.ts`) before frontend.
    - Validate player token, seat, turn, status transitions.
+   - Check `getEngine(gameType)` output, especially `rules`, `actionSchema`, seats, and player-count constraints.
 
 5. **API contract layer**
    - Confirm request payloads for agent endpoints match protocol expectations.
    - Check event sequencing (`sinceSeq`, `seq`) for poll loops.
+   - If the bug is only in labels/covers/lobby presentation, inspect `packages/game-protocol/src/index.ts` and `frontend/src/lib/game-library.ts` instead of the Worker first.
 
 ## 10) Known Practical Notes
 
 - Repository remote has moved to `PKU-YuanGroup/ClawGame`.
 - Docs-only changes are intentionally excluded from CI/deploy triggers.
 
-## 11) Suggested Next Migration Steps (D1-first)
+## 11) New Game Workflow
+
+Preferred path for adding a new game:
+
+1. Run the scaffold command from repo root:
+   - `node scripts/scaffold-game.mjs --id <game_id> --en "<English Name>" --zh "<中文名>"`
+2. The scaffold will:
+   - create `packages/game-engine/src/<game_id>.ts`
+   - register the engine in `packages/game-engine/src/registry.ts`
+   - export it from `packages/game-engine/src/index.ts`
+   - add a `GAME_CATALOG` entry in `packages/game-protocol/src/index.ts`
+3. The scaffold now covers:
+   - engine template
+   - registry wiring
+   - protocol catalog entry
+   - frontend one-click placeholder theme/cover via deterministic fallback in `frontend/src/lib/game-library.ts`
+4. After scaffolding, you still need to:
+   - implement the real game logic inside the generated engine
+   - tune catalog metadata if placeholder `rules`, `roomRules`, or `actionSchema` are too generic
+   - add a dedicated room renderer in `frontend/src/components/RoomClient.tsx` only if the generic room presentation is not sufficient
+
+Useful scaffold flags:
+- `--min`, `--max`, `--seats`
+- `--objective`, `--phases`, `--events`
+- `--action-type`, `--action-payload`
+- `--room-rules`
+- `--dry-run`
+
+Important constraint:
+- The command removes most of the repetitive registration work, but it does not make a game fully playable by itself. The generated engine is still a placeholder until you implement real validation and state transitions.
+
+## 12) Suggested Next Migration Steps (D1-first)
 
 1. Define explicit relational D1 schema for core entities:
 2. Replace transitional `app_kv` bridge with typed relational repositories.
@@ -225,5 +273,13 @@ When something breaks, debug in this order:
 If you are an AI agent reading this file, start from:
 1) `worker/src/index.ts`
 2) `worker/src/durable-room.ts`
-3) `worker/src/lib/store.ts`
-Then trace the endpoint you need to modify.
+3) `packages/game-engine/src/registry.ts`
+4) `packages/game-engine/src/types.ts`
+5) `packages/game-protocol/src/index.ts`
+6) `frontend/src/lib/game-library.ts`
+7) `worker/src/lib/store.ts` if the issue involves persistence
+
+Routing guidance:
+- If the task is gameplay/runtime behavior, trace `worker/src/durable-room.ts` -> `packages/game-engine`.
+- If the task is game discovery, labels, rules text, or covers, trace `packages/game-protocol` -> `frontend/src/lib/game-library.ts`.
+- If the task is “add a new game”, use `scripts/scaffold-game.mjs` first instead of wiring files by hand.

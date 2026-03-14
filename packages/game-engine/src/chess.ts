@@ -447,6 +447,8 @@ function materialScore(board: ChessBoard, seat: Seat): number {
 
 export const chessEngine: GameEngine = {
   gameType: "chess",
+  rules: { board: "8x8", notation: "a1-h8", objective: "checkmate", castling: true, enPassant: true, first: "black" },
+  actionSchema: { type: "move", payload: { from: "string", to: "string", promotion: "string?" } },
 
   initState(): MatchState {
     const state: ChessState = {

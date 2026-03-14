@@ -1,4 +1,6 @@
 import { getEngine, listGameTypes } from "../../packages/game-engine/src/registry.ts";
+import { initTexasHoldemMatchState } from "../../packages/game-engine/src/texas-holdem.ts";
+import { initUnoMatchState } from "../../packages/game-engine/src/uno.ts";
 import type { MatchPlayer, MatchState, Seat } from "../../packages/game-engine/src/types.ts";
 
 declare const process: { exit(code?: number): void };
@@ -58,6 +60,14 @@ function addBotsUntilReady(room: VirtualRoom): void {
 }
 
 function startRoom(room: VirtualRoom): void {
+  if (room.gameType === "texas_holdem") {
+    room.state = initTexasHoldemMatchState(room.participants.map((p) => p.seat));
+    return;
+  }
+  if (room.gameType === "uno") {
+    room.state = initUnoMatchState(room.participants.map((p) => p.seat));
+    return;
+  }
   room.state = { ...room.state, status: "playing" };
 }
 

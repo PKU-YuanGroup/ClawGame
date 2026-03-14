@@ -15,11 +15,18 @@ export interface MatchState {
   moveCount: number;
 }
 
+export interface GameActionSchema {
+  type: string;
+  payload: Record<string, unknown>;
+}
+
 export interface GameEngine {
   readonly gameType: string;
   readonly seats?: readonly Seat[];
   readonly minPlayers?: number;
   readonly maxPlayers?: number;
+  readonly rules: Record<string, unknown>;
+  readonly actionSchema: GameActionSchema;
   initState(): MatchState;
   validateMove(state: MatchState, seat: Seat, move: unknown): void;
   applyMove(state: MatchState, seat: Seat, move: unknown): MatchState;

@@ -1,4 +1,4 @@
-import { getEngine } from "./games/registry";
+import { getEngine, initTexasHoldemMatchState, initUnoMatchState, texasHoldemHandleSeatLeave } from "./games/registry";
 import type { MatchPlayer, MatchState, Seat } from "./games/types";
 import type { Env } from "./types";
 import type { ProtocolEnvelope, RoomCommandRequest, RoomCommandResponse } from "@openclaw/game-protocol";
@@ -137,6 +137,10 @@ export class GameRoomDO {
       }
       if (msg.type === "remove_openclaw") {
         void this.handleRemoveOpenclawWs(ws, msg.payload ?? {});
+        return;
+      }
+      if (msg.type === "start_game") {
+        void this.handleStartGameWs(ws);
       }
     } catch {
       ws.send(JSON.stringify({ type: "error", message: "invalid message" }));
@@ -562,6 +566,63 @@ export class GameRoomDO {
     })));
   }
 
+  private async handleStartGameWs(ws: WebSocket): Promise<void> {
+    const meta = this.sockets.get(ws);
+    if (!meta) return;
+    const data = await this.requireRoom();
+
+    const viewerId = String(meta.viewerId || "").trim();
+    if (!viewerId || viewerId.startsWith("guest")) {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: "login required" })));
+      return;
+    }
+    if (viewerId !== String(data.ownerId || "")) {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: "only room owner can start game" })));
+      return;
+    }
+    if (data.gameType !== "texas_holdem" && data.gameType !== "uno") {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: "manual start is only enabled for texas hold'em and uno" })));
+      return;
+    }
+    if (String((data.state as any)?.status || "") !== "waiting") {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: "game already started" })));
+      return;
+    }
+
+    const seats = Array.from(new Set(
+      data.players
+        .filter((p) => !String(p.id || "").startsWith("openclaw:"))
+        .map((p) => String(p.seat || ""))
+        .filter(Boolean),
+    ));
+    const minPlayers = Number(getEngine(data.gameType).minPlayers || 2);
+    const maxPlayers = Number(getEngine(data.gameType).maxPlayers || seats.length || 2);
+    if (seats.length < minPlayers) {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: "at least 2 players are required" })));
+      return;
+    }
+    if (seats.length > maxPlayers) {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: `at most ${maxPlayers} players are allowed` })));
+      return;
+    }
+
+    data.state = data.gameType === "texas_holdem"
+      ? (initTexasHoldemMatchState(seats) as MatchState)
+      : (initUnoMatchState(seats) as MatchState);
+    delete (data.state as any).settlementPlayers;
+    this.clearDefaultRoomAutoReset(data);
+    data.eventSeq = (data.eventSeq || 0) + 1;
+
+    const systemMsg = this.addSystemChat(data, `Owner started ${data.gameType === "uno" ? "UNO" : "Texas Hold'em"} match.`);
+    if (systemMsg) this.broadcast(data, "chat", systemMsg);
+
+    await this.save(data);
+    this.broadcast(data, "state_update", this.toSnapshot(data));
+    this.broadcast(data, "online_update", this.currentOnline(data));
+    ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: true })));
+    void this.runBotTurns(data);
+  }
+
   private async pushOnlineUpdate(): Promise<void> {
     const data = await this.load();
     if (!data) return;
@@ -931,10 +992,15 @@ export class GameRoomDO {
     }
 
     const maxParticipants = this.gameMaxParticipants(data.gameType);
-    // Capacity is based on occupied seats/sides, not participant identity.
-    if (data.players.length >= maxParticipants) throw new Error("Room is full");
+    const occupiedSeats = new Set(data.players.map((p) => p.seat));
+    if ((data.gameType === "texas_holdem" || data.gameType === "uno") && String((data.state as any)?.status || "") === "playing") {
+      throw new Error("can only join before game starts");
+    }
 
-    const seat = this.nextSeatFor(data);
+    const seat = playerId.startsWith("openclaw:")
+      ? (data.players.find((p) => this.normalizeParticipantId(p.id) === participantId)?.seat || this.nextSeatFor(data))
+      : this.nextSeatFor(data);
+    if (!occupiedSeats.has(seat) && occupiedSeats.size >= maxParticipants) throw new Error("Room is full");
 
     const token = crypto.randomUUID();
     data.players.push({ id: playerId, seat, token });
@@ -942,8 +1008,10 @@ export class GameRoomDO {
 
     const readyParticipants = this.readyParticipantCount(data);
     const hasRequiredNonHuman = this.hasOpenclawOrBotParticipant(data);
+    const canAutoStart = data.gameType !== "texas_holdem" && data.gameType !== "uno";
     if (
-      readyParticipants >= this.gameMinParticipants(data.gameType)
+      canAutoStart
+      && readyParticipants >= this.gameMinParticipants(data.gameType)
       && hasRequiredNonHuman
       && data.state.status === "waiting"
     ) {
@@ -1032,7 +1100,7 @@ export class GameRoomDO {
       this.sockets.set(socket, socketMeta);
     }
 
-    if (wasPlaying && leavingSeat) {
+    if (wasPlaying && leavingSeat && data.gameType !== "texas_holdem") {
       const state: any = data.state as any;
       state.status = "finished";
       state.winner = this.getOpponentSeat(data, leavingSeat) || "draw";
@@ -1047,6 +1115,20 @@ export class GameRoomDO {
         moveCount: Number(state.moveCount || 0),
       });
       this.moveAllPlayersToSpectators(data);
+    }
+    if (wasPlaying && leavingSeat && data.gameType === "texas_holdem") {
+      data.state = texasHoldemHandleSeatLeave(data.state, leavingSeat) as MatchState;
+      const state: any = data.state as any;
+      const systemMsg = this.addSystemChat(data, `${leavingSeat} left the room.`);
+      if (systemMsg) this.broadcast(data, "chat", systemMsg);
+      if (String(state?.status || "") === "finished") {
+        this.markDefaultRoomAutoReset(data);
+        this.broadcast(data, "game_over", {
+          winner: state.winner ?? "draw",
+          reason: state.finishReason || "showdown",
+          moveCount: Number(state.moveCount || 0),
+        });
+      }
     }
 
     const readyParticipants = this.readyParticipantCount(data);
@@ -1092,7 +1174,7 @@ export class GameRoomDO {
       this.sockets.set(socket, socketMeta);
     }
 
-    if (wasPlaying && leavingSeats.length > 0) {
+    if (wasPlaying && leavingSeats.length > 0 && data.gameType !== "texas_holdem") {
       const state: any = data.state as any;
       const primarySeat = leavingSeats[0];
       state.status = "finished";
@@ -1108,6 +1190,22 @@ export class GameRoomDO {
         moveCount: Number(state.moveCount || 0),
       });
       this.moveAllPlayersToSpectators(data);
+    }
+    if (wasPlaying && leavingSeats.length > 0 && data.gameType === "texas_holdem") {
+      for (const seat of leavingSeats) {
+        data.state = texasHoldemHandleSeatLeave(data.state, seat) as MatchState;
+      }
+      const state: any = data.state as any;
+      const systemMsg = this.addSystemChat(data, `${leavingSeats.join(", ")} left the room.`);
+      if (systemMsg) this.broadcast(data, "chat", systemMsg);
+      if (String(state?.status || "") === "finished") {
+        this.markDefaultRoomAutoReset(data);
+        this.broadcast(data, "game_over", {
+          winner: state.winner ?? "draw",
+          reason: state.finishReason || "showdown",
+          moveCount: Number(state.moveCount || 0),
+        });
+      }
     }
 
     const readyParticipants = this.readyParticipantCount(data);

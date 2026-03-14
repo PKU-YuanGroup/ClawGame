@@ -40,6 +40,7 @@ type RoomEvent = ProtocolEnvelope<{ messages?: ChatMessage[]; users?: OnlineItem
 
 const DEFAULT_AVATAR = "https://placehold.co/40x40/1e293b/e2e8f0?text=?";
 const ME_CACHE_KEY = "me_cache_v1";
+const UI_ACTION_TIMEOUT_MS = 8000;
 
 function getViewerId(userId?: string) {
   if (userId) return userId;
@@ -145,8 +146,10 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const [botJoining, setBotJoining] = useState(false);
   const [botRemoving, setBotRemoving] = useState(false);
   const [openclawRemoving, setOpenclawRemoving] = useState(false);
+  const [startingGame, setStartingGame] = useState(false);
   const joinGameTimerRef = useRef<number | null>(null);
   const joinBotTimerRef = useRef<number | null>(null);
+  const leaveGameTimerRef = useRef<number | null>(null);
   const removeBotLockRef = useRef(false);
   const removeBotTimerRef = useRef<number | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; text: string; level: "error" | "info" }>>([]);
@@ -168,6 +171,21 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const pingSentRef = useRef(0);
   const pingAckRef = useRef(0);
   const pingLostRef = useRef(0);
+
+  function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = window.setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      promise
+        .then((value) => {
+          window.clearTimeout(timer);
+          resolve(value);
+        })
+        .catch((err) => {
+          window.clearTimeout(timer);
+          reject(err);
+        });
+    });
+  }
 
   useEffect(() => {
     let hasCached = false;
@@ -331,6 +349,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
           setWsLatencyMs(null);
           setJoining(false);
           setOpenclawJoining(false);
+          setLeaving(false);
           setBotJoining(false);
           setBotRemoving(false);
           removeBotLockRef.current = false;
@@ -341,6 +360,10 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
           if (joinBotTimerRef.current) {
             window.clearTimeout(joinBotTimerRef.current);
             joinBotTimerRef.current = null;
+          }
+          if (leaveGameTimerRef.current) {
+            window.clearTimeout(leaveGameTimerRef.current);
+            leaveGameTimerRef.current = null;
           }
           if (removeBotTimerRef.current) {
             window.clearTimeout(removeBotTimerRef.current);
@@ -360,6 +383,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
           setWsReady(false);
           setJoining(false);
           setOpenclawJoining(false);
+          setLeaving(false);
           setBotJoining(false);
           setBotRemoving(false);
           removeBotLockRef.current = false;
@@ -370,6 +394,10 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
           if (joinBotTimerRef.current) {
             window.clearTimeout(joinBotTimerRef.current);
             joinBotTimerRef.current = null;
+          }
+          if (leaveGameTimerRef.current) {
+            window.clearTimeout(leaveGameTimerRef.current);
+            leaveGameTimerRef.current = null;
           }
           if (removeBotTimerRef.current) {
             window.clearTimeout(removeBotTimerRef.current);
@@ -405,6 +433,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
             setBotJoining(false);
             setBotRemoving(false);
             setOpenclawRemoving(false);
+            setStartingGame(false);
             removeBotLockRef.current = false;
             if (joinGameTimerRef.current) {
               window.clearTimeout(joinGameTimerRef.current);
@@ -437,6 +466,10 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
             }
             if (payload.kind === "leave_game") {
               setLeaving(false);
+              if (leaveGameTimerRef.current) {
+                window.clearTimeout(leaveGameTimerRef.current);
+                leaveGameTimerRef.current = null;
+              }
               if (payload.ok) {
                 setPlayerToken("");
                 setText("");
@@ -469,6 +502,13 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
               void refreshRoomPresence();
               if (!payload.ok) {
                 pushToast(String(payload.error || t("room.toastRemoveOpenclawFailed")), "error");
+              }
+            }
+            if (payload.kind === "start_game") {
+              setStartingGame(false);
+              void refreshRoomPresence();
+              if (!payload.ok) {
+                pushToast(String(payload.error || t("room.toastStartGameFailed")), "error");
               }
             }
             if (payload?.ok && payload?.actor && payload?.move) {
@@ -536,6 +576,10 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
       if (joinBotTimerRef.current) {
         window.clearTimeout(joinBotTimerRef.current);
         joinBotTimerRef.current = null;
+      }
+      if (leaveGameTimerRef.current) {
+        window.clearTimeout(leaveGameTimerRef.current);
+        leaveGameTimerRef.current = null;
       }
       if (removeBotTimerRef.current) {
         window.clearTimeout(removeBotTimerRef.current);
@@ -695,20 +739,42 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   async function leaveGame() {
     if (leaving) return;
     setLeaving(true);
+    if (leaveGameTimerRef.current) window.clearTimeout(leaveGameTimerRef.current);
+    leaveGameTimerRef.current = window.setTimeout(() => {
+      setLeaving(false);
+      leaveGameTimerRef.current = null;
+      pushToast(t("room.toastLeaveRoomFailed"), "error");
+      void refreshRoomPresence();
+    }, UI_ACTION_TIMEOUT_MS);
     try {
       if (roomId && playerToken) {
-        await api("/api/match/leave", {
-          method: "POST",
-          body: JSON.stringify({ roomId, playerToken }),
-        });
+        await withTimeout(
+          api("/api/match/leave", {
+            method: "POST",
+            body: JSON.stringify({ roomId, playerToken }),
+          }),
+          UI_ACTION_TIMEOUT_MS,
+          "leave request timeout",
+        );
+        if (leaveGameTimerRef.current) {
+          window.clearTimeout(leaveGameTimerRef.current);
+          leaveGameTimerRef.current = null;
+        }
+        setLeaving(false);
         setPlayerToken("");
         await refreshRoomPresence();
         return;
       }
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "leave_game" }));
+        return;
       }
+      throw new Error("ws not connected");
     } catch (err) {
+      if (leaveGameTimerRef.current) {
+        window.clearTimeout(leaveGameTimerRef.current);
+        leaveGameTimerRef.current = null;
+      }
       setLeaving(false);
       pushToast((err as Error).message || t("room.toastLeaveRoomFailed"), "error");
     }
@@ -718,10 +784,14 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
     if (!roomId || roomResetting) return;
     setRoomResetting(true);
     try {
-      await api("/api/room/reset", {
-        method: "POST",
-        body: JSON.stringify({ roomId }),
-      });
+      await withTimeout(
+        api("/api/room/reset", {
+          method: "POST",
+          body: JSON.stringify({ roomId }),
+        }),
+        UI_ACTION_TIMEOUT_MS,
+        "reset request timeout",
+      );
       pushToast(t("room.toastRoomResetSuccess"), "info");
     } catch (err) {
       pushToast((err as Error).message || t("room.toastRoomResetFailed"), "error");
@@ -734,10 +804,14 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
     if (!roomId || roomLeaving) return;
     setRoomLeaving(true);
     try {
-      await api("/api/room/leave", {
-        method: "POST",
-        body: JSON.stringify({ roomId }),
-      });
+      await withTimeout(
+        api("/api/room/leave", {
+          method: "POST",
+          body: JSON.stringify({ roomId }),
+        }),
+        UI_ACTION_TIMEOUT_MS,
+        "leave room request timeout",
+      );
       setPlayerToken("");
       setText("");
       pushToast(t("room.toastLeaveRoomSuccess"), "info");
@@ -858,16 +932,22 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
 
   function removeMyOpenclaw() {
     if (openclawRemoving) return;
-    if (statusText !== "waiting") {
-      pushToast(t("room.toastRemoveOpenclawFailed"), "error");
-      return;
-    }
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       pushToast(t("room.toastWsNotConnected"), "error");
       return;
     }
     setOpenclawRemoving(true);
     ws.send(JSON.stringify({ type: "remove_openclaw" }));
+  }
+
+  function startGame() {
+    if (startingGame) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      pushToast(t("room.toastWsNotConnected"), "error");
+      return;
+    }
+    setStartingGame(true);
+    ws.send(JSON.stringify({ type: "start_game" }));
   }
 
   function sendChat() {
@@ -916,6 +996,11 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const myOpenclawJoined = Boolean(myOpenclawId)
     && Array.isArray(snapshot?.players)
     && snapshot.players.some((p: any) => String(p?.id || "") === myOpenclawId);
+  const texasSeatCount = Array.from(new Set(
+    (Array.isArray(snapshot?.players) ? snapshot.players : [])
+      .map((p: any) => String(p?.seat || ""))
+      .filter(Boolean),
+  )).length;
   const gameState = snapshot?.state || {};
   const ownerId = String(snapshot?.ownerId || "");
   const isOwner = Boolean(me?.id)
@@ -935,12 +1020,18 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const lobbyGameType = String(snapshot?.gameType || gameState?.gameType || gameTypeHint || "").trim();
   const gameLabel = getGameLabel(gameType, lang);
   const gameTheme = getGameTheme(gameType);
-  const supportsBot = ["gomoku", "go", "xiangqi", "chess", "texas_holdem", "werewolf", "junqi", "who_is_undercover", "guandan"].includes(gameType);
+  const supportsBot = ["gomoku", "go", "xiangqi", "chess", "texas_holdem", "werewolf", "junqi", "who_is_undercover", "guandan", "uno"].includes(gameType);
   const boardSize = Number(gameState?.size || gameState?.boardSize || (Array.isArray(gameState?.board) ? gameState.board.length : 15));
   const board = Array.isArray(gameState?.board) ? gameState.board : [];
   const boardHeight = Number(gameState?.height || board.length || boardSize);
   const boardWidth = Number(gameState?.width || board[0]?.length || boardSize);
   const statusText = gameState?.status || "waiting";
+  const canStartManualGame = isOwner
+    && statusText === "waiting"
+    && (
+      (gameType === "texas_holdem" && texasSeatCount >= 2)
+      || (gameType === "uno" && texasSeatCount >= 2 && texasSeatCount <= 4)
+    );
   const isGameFinished = statusText === "finished" || Boolean((gameState as any)?.winner) || Boolean(gameOverWinner);
   const autoResetAt = Number((gameState as any)?.autoResetAt || (snapshot as any)?.autoResetAt || 0);
   const isDefaultAutoResetRoom = autoResetAt > 0;
@@ -1114,8 +1205,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   }
 
   function renderPlayerRail() {
-    const players = (Array.isArray(snapshot?.players) ? snapshot.players : [])
-      .filter((player: any) => !String(player?.id || "").startsWith("bot:"));
+    const players = Array.isArray(snapshot?.players) ? snapshot.players : [];
     return (
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {players.map((player: any, index: number) => {
@@ -1295,6 +1385,16 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
               </div>
 
             </>
+            ) : null}
+            {canStartManualGame ? (
+              <button
+                className="inline-flex h-8 items-center justify-center rounded border px-2 text-xs font-semibold disabled:opacity-50"
+                style={{ borderColor: "var(--border)", color: "var(--fg)" }}
+                onClick={startGame}
+                disabled={startingGame}
+              >
+                {startingGame ? t("room.startingGame") : t("room.startGame")}
+              </button>
             ) : null}
             {canLeaveGameSeat ? (
               <button

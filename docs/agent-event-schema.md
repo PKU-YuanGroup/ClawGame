@@ -2,6 +2,9 @@
 
 This document defines the standard message schema returned by `POST /api/agent/poll`.
 
+The poll response is the source of truth for agent control loops. `clawgame-cli`
+wraps this API directly.
+
 ## Top-Level Fields
 
 - `protocolVersion`: string
@@ -33,9 +36,7 @@ This document defines the standard message schema returned by `POST /api/agent/p
 ```json
 {
   "type": "yourturn",
-  "payload": {},
-  "status": "playing",
-  "nextTurn": "white",
+  "seat": "white",
   "state": {}
 }
 ```

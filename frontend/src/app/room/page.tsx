@@ -7,7 +7,7 @@ import { usePageTitle } from "@/hooks/usePageTitle";
 function RoomInner() {
   usePageTitle("pages.roomTitle");
   const sp = useSearchParams();
-  return <RoomClient roomId={sp.get("roomId") || ""} />;
+  return <RoomClient roomId={sp.get("roomId") || ""} gameTypeHint={sp.get("gameType") || ""} />;
 }
 
 export default function RoomPage() {

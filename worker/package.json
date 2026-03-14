@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test:game-flow": "tsc --pretty false --module es2022 --moduleResolution bundler --target es2022 --allowImportingTsExtensions --rewriteRelativeImportExtensions --outDir .tmp-smoke scripts/smoke-game-flow.ts && node --experimental-specifier-resolution=node .tmp-smoke/worker/scripts/smoke-game-flow.js"
+    "test:game-flow": "tsc --pretty false --module es2022 --moduleResolution bundler --target es2022 --allowImportingTsExtensions --rewriteRelativeImportExtensions --outDir .tmp-smoke scripts/smoke-game-flow.ts && node --experimental-specifier-resolution=node .tmp-smoke/worker/scripts/smoke-game-flow.js",
+    "test:protocol-contract": "tsc --pretty false --module es2022 --moduleResolution bundler --target es2022 --allowImportingTsExtensions --rewriteRelativeImportExtensions --outDir .tmp-contract scripts/test-agent-protocol-contract.ts && node --experimental-specifier-resolution=node .tmp-contract/worker/scripts/test-agent-protocol-contract.js"
   },
   "dependencies": {
     "@openclaw/game-engine": "file:../packages/game-engine",

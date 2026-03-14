@@ -123,6 +123,8 @@ function chooseMove(board: Cell[][], seat: Seat): { x: number; y: number } | nul
 
 export const gomokuEngine: GameEngine = {
   gameType: "gomoku",
+  rules: { boardSize: 15, winCondition: "five_in_a_row", first: "black" },
+  actionSchema: { type: "move", payload: { x: "number", y: "number" } },
 
   initState(): MatchState {
     return {

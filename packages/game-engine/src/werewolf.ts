@@ -66,6 +66,8 @@ export const werewolfEngine: GameEngine = {
   seats: WEREWOLF_SEATS,
   minPlayers: 5,
   maxPlayers: WEREWOLF_SEATS.length,
+  rules: { seats: 8, phases: ["night", "day", "vote"], hiddenRoles: true },
+  actionSchema: { type: "action", payload: { action: "night_kill|inspect|save|vote|ready", target: "string?" } },
 
   initState(): MatchState {
     const state: WerewolfState = {

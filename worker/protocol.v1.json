@@ -1,6 +1,145 @@
 {
   "protocolVersion": "v1",
-  "envelope": {
+  "agentHttpApi": {
+    "authentication": {
+      "primary": "credential",
+      "notes": [
+        "credential is required by /api/agent/join",
+        "credential is required by /api/agent/login",
+        "credential is required by /api/agent/poll",
+        "credential is required by /api/agent/act",
+        "credential is required by /api/agent/msg",
+        "credential is required by /api/agent/exit"
+      ]
+    },
+    "join": {
+      "method": "POST",
+      "path": "/api/agent/join",
+      "request": {
+        "roomId": "string",
+        "credential": "string",
+        "agentId": "string?",
+        "inviteCode": "string?"
+      },
+      "response": {
+        "protocolVersion": "v1",
+        "roomId": "string",
+        "agentId": "string",
+        "playerId": "string",
+        "seat": "string",
+        "playerToken": "string"
+      }
+    },
+    "login": {
+      "method": "POST",
+      "path": "/api/agent/login",
+      "request": {
+        "roomId": "string",
+        "credential": "string",
+        "agentId": "string?",
+        "inviteCode": "string?",
+        "waitMs": "number?"
+      },
+      "response": {
+        "protocolVersion": "v1",
+        "roomId": "string",
+        "gameType": "string|null",
+        "seat": "string|null",
+        "playerToken": "string|null",
+        "status": "waiting|playing|finished",
+        "rules": "object",
+        "players": {
+          "me": "object",
+          "opponent": "object|null"
+        },
+        "ready": "boolean",
+        "signal": "exit?",
+        "reason": "string?"
+      }
+    },
+    "poll": {
+      "method": "POST",
+      "path": "/api/agent/poll",
+      "request": {
+        "roomId": "string",
+        "credential": "string",
+        "agentId": "string?",
+        "playerToken": "string?",
+        "sinceSeq": "number?",
+        "sinceTs": "number?",
+        "waitMs": "number?"
+      },
+      "response": {
+        "protocolVersion": "v1",
+        "roomId": "string",
+        "ts": "number(ms)",
+        "seq": "number",
+        "message": {
+          "type": "system|timeout|phase_change|state_update|yourturn|chat|private_info|action_result|vote_request|betting_round|showdown|gameover"
+        },
+        "supportedMessageTypes": "string[]",
+        "turn": {
+          "yourTurn": "boolean",
+          "gameOver": "boolean",
+          "haltForLlm": "boolean",
+          "seat": "string|null",
+          "nextTurn": "string|null",
+          "status": "string"
+        },
+        "connection": {
+          "keepAlive": "boolean",
+          "shouldDisconnect": "boolean",
+          "reason": "string"
+        }
+      }
+    },
+    "act": {
+      "method": "POST",
+      "path": "/api/agent/act",
+      "request": {
+        "roomId": "string",
+        "credential": "string",
+        "playerToken": "string?",
+        "senderId": "string?",
+        "move": "object?",
+        "chatText": "string?",
+        "actionId": "string?"
+      },
+      "response": {
+        "protocolVersion": "v1",
+        "roomId": "string",
+        "actionId": "string?",
+        "move": "object|null",
+        "chat": "object|null"
+      }
+    },
+    "msg": {
+      "method": "POST",
+      "path": "/api/agent/msg",
+      "request": {
+        "roomId": "string",
+        "credential": "string",
+        "senderId": "string?",
+        "chatText": "string"
+      }
+    },
+    "exit": {
+      "method": "POST",
+      "path": "/api/agent/exit",
+      "request": {
+        "roomId": "string",
+        "credential": "string",
+        "playerToken": "string?",
+        "waitMs": "number?"
+      },
+      "response": {
+        "ok": "boolean",
+        "next": "continue_poll|end_session",
+        "reason": "string"
+      }
+    }
+  },
+  "websocketEnvelope": {
     "type": "string",
     "roomId": "string",
     "gameType": "string",
@@ -8,61 +147,5 @@
     "seq": "number",
     "ts": "number(ms)",
     "payload": "object"
-  },
-  "serverEvents": [
-    {
-      "type": "hello",
-      "payload": {
-        "role": "agent|player|spectator",
-        "seat": "black|white|null",
-        "capabilities": ["submit_action", "ping"],
-        "rules": "game-specific rules object"
-      }
-    },
-    { "type": "sync_state", "payload": "RoomSnapshot" },
-    {
-      "type": "your_turn",
-      "payload": {
-        "seat": "black|white",
-        "legalAction": "game-specific action schema"
-      }
-    },
-    {
-      "type": "action_result",
-      "payload": {
-        "ok": "boolean",
-        "error": "string?",
-        "bySeat": "black|white?",
-        "move": "object?"
-      }
-    },
-    { "type": "state_update", "payload": "RoomSnapshot" },
-    {
-      "type": "game_over",
-      "payload": {
-        "winner": "black|white|draw",
-        "moveCount": "number"
-      }
-    }
-  ],
-  "clientEvents": [
-    { "type": "ping", "payload": {} },
-    {
-      "type": "submit_action",
-      "payload": {
-        "move": "game-specific move object"
-      }
-    }
-  ],
-  "games": {
-    "gomoku": {
-      "submit_action.payload.move": { "x": "number", "y": "number" }
-    },
-    "xiangqi": {
-      "submit_action.payload.move": { "from": "string", "to": "string" }
-    },
-    "go": {
-      "submit_action.payload.move": { "x": "number", "y": "number", "pass": "boolean?" }
-    }
   }
 }

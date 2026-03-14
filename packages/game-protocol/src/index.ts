@@ -286,6 +286,32 @@ export const GAME_CATALOG: Record<string, GameCatalogItem> = {
       recommendedEvents: ["yourturn", "action_result", "state_update", "gameover"],
     },
   },
+  uno: {
+    key: "uno",
+    name: { en: "UNO", zh: "UNO" },
+    rules: {
+      objective: "discard_all_cards",
+      seats: ["north", "east", "south", "west"],
+      phases: ["playing", "finished"],
+      drawStacking: false,
+      manualStartByOwner: true,
+      recommendedEvents: ["yourturn", "state_update", "action_result", "gameover"],
+    },
+    roomRules: {
+      seats: ["north", "east", "south", "west"],
+      minPlayers: 2,
+      maxPlayers: 4,
+      first: "north",
+    },
+    actionSchema: {
+      type: "action",
+      payload: {
+        action: "play|draw",
+        card: "string?",
+        color: "R|Y|G|B?",
+      },
+    },
+  },
 };
 
 function humanizeGameType(gameType: string): string {

@@ -11,6 +11,7 @@ const VISIBLE_GAME_TYPES = [
   "chess",
   "texas_holdem",
   "who_is_undercover",
+  "uno",
 ] as const;
 
 const VISIBLE_GAME_SET = new Set<string>(VISIBLE_GAME_TYPES);
@@ -97,6 +98,7 @@ export function getGameCover(gameType: string): string {
   if (gameType === "junqi") return svgCover("Junqi", "TACTICAL FRONT", ["#23150e", "#4b2e16", "#a56a2d"], "♜");
   if (gameType === "who_is_undercover") return svgCover("Undercover", "HIDDEN WORD", ["#1d0d33", "#9d174d", "#f97316"], "◈");
   if (gameType === "guandan") return svgCover("Guandan", "DOUBLE DECK", ["#271008", "#7a2d10", "#e2a647"], "🂡");
+  if (gameType === "uno") return svgCover("UNO", "COLOR CLASH", ["#4a0f10", "#cc1f1a", "#f6c945"], "7");
   const protocolCover = protocolGetGameCover(gameType);
   if (!protocolCover.includes("placehold.co/")) return protocolCover;
   return svgCover(getGameLabel(gameType, "en"), generatedSubtitle(gameType), generatedCoverPalette(gameType), generatedMotif(gameType));
@@ -182,6 +184,15 @@ export function getGameTheme(gameType: string): GameTheme {
       accent: "#f0b85c",
       ink: "#fff2de",
       atmosphere: "Heated card table, partner tempo, explosive bombs",
+    };
+  }
+  if (gameType === "uno") {
+    return {
+      cardBackground: "linear-gradient(135deg, #4a1211 0%, #cb1f1a 54%, #f2ca4b 100%)",
+      roomBackground: "radial-gradient(circle at 12% 18%, rgba(245, 202, 75, 0.24), transparent 24%), linear-gradient(180deg, #2f0a0b 0%, #5a1513 52%, #2f0a0b 100%)",
+      accent: "#f2ca4b",
+      ink: "#fff4d5",
+      atmosphere: "Bright party table, fast tempo, color swings",
     };
   }
   return generatedGameTheme(gameType);

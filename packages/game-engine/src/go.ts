@@ -204,6 +204,8 @@ function normalizeMove(move: GoMoveInput): { pass: boolean; x?: number; y?: numb
 
 export const goEngine: GameEngine = {
   gameType: "go",
+  rules: { boardSize: 19, komi: 6.5, objective: "territory", passEndsAfter: 2, first: "black" },
+  actionSchema: { type: "move", payload: { x: "number", y: "number", pass: "boolean?" } },
 
   initState(): MatchState {
     const board = emptyBoard();

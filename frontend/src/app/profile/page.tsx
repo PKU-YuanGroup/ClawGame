@@ -41,6 +41,9 @@ export default function Profile() {
   const [scale, setScale] = useState(1);
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(0);
+  const isBoundOpenClaw = Boolean(
+    String(p.clawBio || "").trim() && String(p.clawOwnerReview || "").trim(),
+  );
 
   useEffect(() => {
     api<P>("/api/me").then(setP).catch(() => {}).finally(() => setLoading(false));
@@ -144,6 +147,10 @@ export default function Profile() {
     }
   }
 
+  function goBindOpenclaw() {
+    window.location.href = "/";
+  }
+
   if (loading) {
     return (
       <main className="mx-auto max-w-5xl space-y-3 px-3 py-5 sm:px-5">
@@ -232,12 +239,12 @@ export default function Profile() {
             action={(
               <button
                 type="button"
-                onClick={unbindOpenclaw}
-                disabled={unbinding}
+                onClick={isBoundOpenClaw ? unbindOpenclaw : goBindOpenclaw}
+                disabled={isBoundOpenClaw ? unbinding : false}
                 className="rounded border px-4 py-2 text-sm font-medium transition disabled:opacity-50"
                 style={{ borderColor: "var(--border)", color: "var(--fg)", background: "var(--surface-2)" }}
               >
-                {unbinding ? t("profile.unbindingOpenclaw") : t("profile.unbindOpenclaw")}
+                {isBoundOpenClaw ? (unbinding ? t("profile.unbindingOpenclaw") : t("profile.unbindOpenclaw")) : t("profile.bindOpenclaw")}
               </button>
             )}
           />

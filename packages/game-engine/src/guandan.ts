@@ -264,6 +264,13 @@ export const guandanEngine: GameEngine = {
   seats: GUANDAN_SEATS,
   minPlayers: 4,
   maxPlayers: 4,
+  rules: {
+    seats: ["north", "east", "south", "west"],
+    teams: [["north", "south"], ["east", "west"]],
+    deck: "two_standard_decks_with_jokers",
+    objective: "one_team_finishes_both_players_first",
+  },
+  actionSchema: { type: "move", payload: { action: "play|pass", cards: "string[]?" } },
 
   initState(): MatchState {
     return buildInitialState();

@@ -656,126 +656,113 @@ export default {
         const canonicalAgentId = String(boundUserId);
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
         await stub.fetch("https://room/agent/touch", { method: "POST" });
+        const cursor = Number(body.sinceSeq || 0);
+        const stateRes = await stub.fetch("https://room/state");
+        const chatRes = await stub.fetch("https://room/chat");
+        if (!stateRes.ok) return passthrough(stateRes);
+        if (!chatRes.ok) return passthrough(chatRes);
+        const state = await stateRes.json<any>();
+        const chat = await chatRes.json<any>();
 
-        const startedAt = Date.now();
-        const waitMs = Math.max(0, Math.min(30000, Number(body.waitMs ?? 25000)));
-        let cursor = Number(body.sinceSeq || 0);
+        const currentSeq = Number(state?.seq || chat?.seq || 0);
+        const status = String(state?.state?.status || "waiting");
+        const nextTurn = String(state?.state?.nextTurn || "");
+        const players = Array.isArray(state?.players) ? state.players : [];
 
-        while (true) {
-          const stateRes = await stub.fetch("https://room/state");
-          const chatRes = await stub.fetch("https://room/chat");
-          if (!stateRes.ok) return passthrough(stateRes);
-          if (!chatRes.ok) return passthrough(chatRes);
-          const state = await stateRes.json<any>();
-          const chat = await chatRes.json<any>();
+        const agentPlayerId = `openclaw:${canonicalAgentId}`;
+        let me = players.find((p: any) => p?.id === agentPlayerId) || null;
 
-          const currentSeq = Number(state?.seq || chat?.seq || 0);
-          const status = String(state?.state?.status || "waiting");
-          const nextTurn = String(state?.state?.nextTurn || "");
-          const players = Array.isArray(state?.players) ? state.players : [];
-
-          const agentPlayerId = `openclaw:${canonicalAgentId}`;
-          let me = players.find((p: any) => p?.id === agentPlayerId) || null;
-
-          let autoJoinedToken = "";
-          if (!me) {
-            const autoJoinRes = await stub.fetch("https://room/command", {
-              method: "POST",
-              body: JSON.stringify({
-                protocolVersion: "v1",
-                roomId: body.roomId,
-                actorType: "openclaw",
-                actorId: `openclaw:${canonicalAgentId}`,
-                command: { kind: "join" },
-              } satisfies RoomCommandRequest),
-            });
-            if (autoJoinRes.ok) {
-              const autoJoinData = await autoJoinRes.json<any>();
-              autoJoinedToken = String((autoJoinData?.data || autoJoinData)?.playerToken || "");
-              const latestStateRes = await stub.fetch("https://room/state");
-              if (latestStateRes.ok) {
-                const latestState = await latestStateRes.json<any>();
-                const latestPlayers = Array.isArray(latestState?.players) ? latestState.players : [];
-                me = autoJoinedToken
-                  ? (latestPlayers.find((p: any) => p?.token === autoJoinedToken) || null)
-                  : (latestPlayers.find((p: any) => p?.id === `openclaw:${canonicalAgentId}`) || null);
-              }
-            }
-          }
-
-          const yourTurn = Boolean(me?.seat) && status === "playing" && nextTurn === me.seat;
-          const gameOver = status === "finished";
-
-          const keepAlive = Boolean(me);
-
-          const messages = Array.isArray(chat?.messages)
-            ? chat.messages.filter((m: any) => Number(m?.seq || 0) > cursor)
-            : [];
-
-          let message: any = null;
-          if (gameOver) {
-            message = {
-              type: "gameover",
-              status,
-              winner: state?.state?.winner ?? "draw",
-              moveCount: Number(state?.state?.moveCount || 0),
-              state,
-            };
-          } else if (yourTurn) {
-            message = {
-              type: "yourturn",
-              seat: me?.seat || null,
-              state,
-            };
-          } else if (messages.length > 0) {
-            const first = messages[0];
-            message = {
-              type: first.senderType === "system" ? "system" : "chat",
-              payload: first,
-            };
-          } else if (currentSeq > cursor) {
-            message = {
-              type: status === "playing" ? "state_update" : "phase_change",
-              nextTurn: nextTurn || null,
-              status,
-              state,
-            };
-          }
-
-          if (message || !keepAlive || Date.now() - startedAt >= waitMs) {
-            const nextSeq = Math.max(cursor, currentSeq, ...messages.map((m: any) => Number(m?.seq || 0)));
-            const finalMessage = message || {
-              type: Date.now() - startedAt >= waitMs ? "timeout" : "system",
-              payload: {
-                reason: !keepAlive ? "agent_not_in_room" : "wait_timeout",
-              },
-            };
-            return json({
+        let autoJoinedToken = "";
+        if (!me) {
+          const autoJoinRes = await stub.fetch("https://room/command", {
+            method: "POST",
+            body: JSON.stringify({
               protocolVersion: "v1",
               roomId: body.roomId,
-              ts: Date.now(),
-              seq: nextSeq,
-              message: finalMessage,
-              supportedMessageTypes: AGENT_EVENT_TYPES,
-              turn: {
-                yourTurn,
-                gameOver,
-                haltForLlm: yourTurn,
-                seat: me?.seat || null,
-                nextTurn: nextTurn || null,
-                status,
-              },
-              connection: {
-                keepAlive,
-                shouldDisconnect: !keepAlive || gameOver,
-                reason: gameOver ? "game_over" : keepAlive ? "active" : "agent_not_in_room",
-              },
-            });
+              actorType: "openclaw",
+              actorId: `openclaw:${canonicalAgentId}`,
+              command: { kind: "join" },
+            } satisfies RoomCommandRequest),
+          });
+          if (autoJoinRes.ok) {
+            const autoJoinData = await autoJoinRes.json<any>();
+            autoJoinedToken = String((autoJoinData?.data || autoJoinData)?.playerToken || "");
+            const latestStateRes = await stub.fetch("https://room/state");
+            if (latestStateRes.ok) {
+              const latestState = await latestStateRes.json<any>();
+              const latestPlayers = Array.isArray(latestState?.players) ? latestState.players : [];
+              me = autoJoinedToken
+                ? (latestPlayers.find((p: any) => p?.token === autoJoinedToken) || null)
+                : (latestPlayers.find((p: any) => p?.id === `openclaw:${canonicalAgentId}`) || null);
+            }
           }
-
-          cursor = Math.max(cursor, currentSeq);
-          await sleep(1000);
         }
+
+        const yourTurn = Boolean(me?.seat) && status === "playing" && nextTurn === me.seat;
+        const gameOver = status === "finished";
+        const keepAlive = Boolean(me);
+
+        const messages = Array.isArray(chat?.messages)
+          ? chat.messages.filter((m: any) => Number(m?.seq || 0) > cursor)
+          : [];
+
+        let message: any = null;
+        if (gameOver) {
+          message = {
+            type: "gameover",
+            status,
+            winner: state?.state?.winner ?? "draw",
+            moveCount: Number(state?.state?.moveCount || 0),
+            state,
+          };
+        } else if (yourTurn) {
+          message = {
+            type: "yourturn",
+            seat: me?.seat || null,
+            state,
+          };
+        } else if (messages.length > 0) {
+          const first = messages[0];
+          message = {
+            type: first.senderType === "system" ? "system" : "chat",
+            payload: first,
+          };
+        } else if (currentSeq > cursor) {
+          message = {
+            type: status === "playing" ? "state_update" : "phase_change",
+            nextTurn: nextTurn || null,
+            status,
+            state,
+          };
+        }
+
+        const nextSeq = Math.max(cursor, currentSeq, ...messages.map((m: any) => Number(m?.seq || 0)));
+        const finalMessage = message || {
+          type: "idle",
+          payload: { reason: keepAlive ? "no_event" : "agent_not_in_room" },
+        };
+
+        return json({
+          protocolVersion: "v1",
+          roomId: body.roomId,
+          ts: Date.now(),
+          seq: nextSeq,
+          message: finalMessage,
+          supportedMessageTypes: AGENT_EVENT_TYPES,
+          turn: {
+            yourTurn,
+            gameOver,
+            haltForLlm: yourTurn,
+            seat: me?.seat || null,
+            nextTurn: nextTurn || null,
+            status,
+          },
+          connection: {
+            keepAlive,
+            shouldDisconnect: !keepAlive || gameOver,
+            reason: gameOver ? "game_over" : keepAlive ? "active" : "agent_not_in_room",
+          },
+        });
       }
 
       if (request.method === "POST" && url.pathname === "/api/agent/act") {

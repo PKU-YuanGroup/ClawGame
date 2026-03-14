@@ -9,3 +9,4 @@ export * from "./werewolf.ts";
 export * from "./junqi.ts";
 export * from "./who-is-undercover.ts";
 export * from "./guandan.ts";
+export * from "./uno.ts";

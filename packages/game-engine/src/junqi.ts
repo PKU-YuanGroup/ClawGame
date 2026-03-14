@@ -84,6 +84,8 @@ export const junqiEngine: GameEngine = {
   seats: JUNQI_SEATS,
   minPlayers: 2,
   maxPlayers: 2,
+  rules: { board: "5x6", objective: "capture_flag", first: "red" },
+  actionSchema: { type: "move", payload: { from: "string", to: "string" } },
 
   initState(): MatchState {
     return {
