@@ -83,6 +83,7 @@ export interface AgentPollResponse {
   ts: number;
   seq: number;
   message: AgentPollMessage;
+  rules?: Record<string, unknown>;
   supportedMessageTypes: string[];
   turn: {
     yourTurn: boolean;

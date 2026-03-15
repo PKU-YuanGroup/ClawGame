@@ -1,11 +1,11 @@
 import { GameRoomDO, type RoomVisibility } from "./durable-room";
-import { listGameTypes } from "./games/registry";
+import { getEngine, listGameTypes } from "./games/registry";
 import { handleAuthRoutes } from "./routes/auth";
 import { handleProfileRoutes } from "./routes/profile";
 import { json, passthrough, shortCode, wsBaseFromRequest } from "./lib/http";
 import { AGENT_EVENT_TYPES } from "./lib/agent-events";
 import { getUserProfile, requireUser } from "./lib/user";
-import { storeGet, storeList, storePut } from "./lib/store";
+import { storeDelete, storeGet, storeList, storePut } from "./lib/store";
 import type { Env, LeaderboardEntry, UserProfile } from "./types";
 import { getGameRules, type AgentActRequest, type AgentJoinRequest, type AgentPollRequest, type RoomCommandRequest } from "@openclaw/game-protocol";
 import { getClawCredential, resolveUserByCredential } from "./lib/claw-auth";
@@ -19,6 +19,19 @@ export default {
 
       if (url.pathname === "/api/health") {
         return json({ ok: true, games: listGameTypes() });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/analysis") {
+        const [registeredUsers, registeredOpenclaw] = await Promise.all([
+          countKvByPrefix(env, "user:"),
+          countKvByPrefix(env, "user-claw-credential:"),
+        ]);
+        return json({
+          ok: true,
+          registeredUsers,
+          registeredOpenclaw,
+          ts: Date.now(),
+        });
       }
 
       const authRes = await handleAuthRoutes(request, env, url);
@@ -528,7 +541,7 @@ export default {
           seat: me?.seat || joinData?.seat || null,
           playerToken: joinData?.playerToken || null,
           status: normalizedStatus,
-          rules: getGameRules(String(state?.gameType || ""), AGENT_EVENT_TYPES),
+          rules: buildAgentRules(String(state?.gameType || "")),
           pollConfig: {
             gameStarted: normalizedStatus === "playing" || normalizedStatus === "finished",
             pollTimeoutsMs,
@@ -587,60 +600,12 @@ export default {
         if (!boundUserId) return json({ error: "invalid credential" }, 401);
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
         const playerId = `openclaw:${boundUserId}`;
-
-        const resolvePlayerToken = async (): Promise<string> => {
-          const tokenRes = await stub.fetch("https://room/agent/player-token", {
-            method: "POST",
-            body: JSON.stringify({ playerId }),
-          });
-          if (!tokenRes.ok) return "";
-          const tokenData = await tokenRes.json<any>();
-          return String(tokenData?.playerToken || "");
-        };
-
-        let effectivePlayerToken = await resolvePlayerToken();
-        if (!effectivePlayerToken) {
-          const joinRes = await stub.fetch("https://room/command", {
-            method: "POST",
-            body: JSON.stringify({
-              protocolVersion: "v1",
-              roomId: body.roomId,
-              actorType: "openclaw",
-              actorId: playerId,
-              command: { kind: "join" },
-            } satisfies RoomCommandRequest),
-          });
-          if (joinRes.ok) {
-            const joinData = await joinRes.json<any>();
-            effectivePlayerToken = String((joinData?.data || joinData)?.playerToken || "");
-          }
-        }
-        if (!effectivePlayerToken) return json({ ok: true, next: "end_session", reason: "agent_not_in_room" });
-
-        const waitMs = Math.max(0, Math.min(60000, Number(body.waitMs ?? 20000)));
-        const startedAt = Date.now();
-        while (Date.now() - startedAt < waitMs) {
-          const stateRes = await stub.fetch("https://room/state");
-          if (!stateRes.ok) break;
-          const state = await stateRes.json<any>();
-          const status = String(state?.state?.status || "waiting");
-          const rematch = state?.rematch || {};
-          const closed = Boolean(rematch?.closed);
-
-          if (status === "playing") {
-            return json({ ok: true, next: "continue_poll", reason: "rematch_started" });
-          }
-          if (closed) {
-            const leaveRes = await stub.fetch("https://room/leave", {
-              method: "POST",
-              body: JSON.stringify({ playerToken: effectivePlayerToken }),
-            });
-            if (!leaveRes.ok) return passthrough(leaveRes);
-            return json({ ok: true, next: "end_session", reason: "opponent_declined_rematch" });
-          }
-          await sleep(1000);
-        }
-        return json({ ok: true, next: "continue_poll", reason: "rematch_pending" });
+        const leaveRes = await stub.fetch("https://room/agent/leave", {
+          method: "POST",
+          body: JSON.stringify({ playerId }),
+        });
+        if (!leaveRes.ok) return passthrough(leaveRes);
+        return json({ ok: true, next: "end_session", reason: "exited" });
       }
 
       if (request.method === "POST" && url.pathname === "/api/agent/poll") {
@@ -719,6 +684,7 @@ export default {
           ts: Date.now(),
           seq: nextSeq,
           message: finalMessage,
+          rules: buildAgentRules(String(state?.gameType || "")),
           supportedMessageTypes: AGENT_EVENT_TYPES,
           turn: {
             yourTurn,
@@ -929,6 +895,23 @@ const AGENT_POLL_TIMEOUTS_BY_GAME: Record<string, { waiting: number; playing: nu
 function agentPollTimeoutsForGame(gameType: string): { waiting: number; playing: number; finished: number } {
   const key = String(gameType || "").trim();
   return AGENT_POLL_TIMEOUTS_BY_GAME[key] || DEFAULT_AGENT_POLL_TIMEOUTS_MS;
+}
+
+function buildAgentRules(gameType: string): Record<string, unknown> {
+  const key = String(gameType || "").trim();
+  const rules = getGameRules(key, AGENT_EVENT_TYPES);
+  try {
+    const engine = getEngine(key);
+    if (rules && typeof rules === "object" && !Array.isArray(rules)) {
+      if (!("actionSchema" in rules) || !rules.actionSchema) {
+        return { ...rules, actionSchema: engine.actionSchema };
+      }
+      return rules;
+    }
+    return { actionSchema: engine.actionSchema };
+  } catch {
+    return rules;
+  }
 }
 
 function randomRoomId(): string {
@@ -1244,4 +1227,20 @@ async function updateLeaderboard(
       await storePut(env, `user:${userId}`, JSON.stringify(profile));
     }),
   );
+}
+
+async function countKvByPrefix(env: Env, prefix: string): Promise<number> {
+  if (!env.DB) throw new Error("D1 binding 'DB' is required");
+  await env.DB
+    .prepare("CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER)")
+    .run();
+  await env.DB
+    .prepare("CREATE INDEX IF NOT EXISTS idx_app_kv_expires_at ON app_kv(expires_at)")
+    .run();
+  const nowSec = Math.floor(Date.now() / 1000);
+  const row = await env.DB
+    .prepare("SELECT COUNT(1) AS c FROM app_kv WHERE k LIKE ? AND (expires_at IS NULL OR expires_at > ?)")
+    .bind(`${prefix}%`, nowSec)
+    .first<{ c: number }>();
+  return Number(row?.c || 0);
 }
