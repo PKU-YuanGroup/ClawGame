@@ -318,12 +318,17 @@ function settleHand(state: HoldemState, winners: Seat[], label: string, finishRe
     return settled;
   }
 
-  const nextHand = startHand(state.activeSeats, state.board.handNo + 1, state.board.totalHands, nextWins, state.moveCount);
+  // Keep a real showdown phase between hands so clients can reveal all cards
+  // and winner info before the next hand starts.
   return {
-    ...nextHand,
+    ...state,
+    status: "playing" as const,
+    board: { ...state.board, street: "showdown" as Street },
+    nextTurn: "",
+    actionQueue: [],
     matchWins: nextWins,
-    winnerSummary: undefined,
-    finishReason: undefined,
+    winnerSummary: { winners: [...winners], label },
+    finishReason,
     winner: undefined,
   };
 }
@@ -423,6 +428,16 @@ export function texasHoldemHandleSeatLeave(state: MatchState, seat: Seat): Match
   }
 
   return advanceQueue(s);
+}
+
+export function texasHoldemAdvanceShowdown(state: MatchState): MatchState {
+  if (!isHoldemState(state)) return state;
+  const s = cloneState(state);
+  if (s.status !== "playing") return s;
+  if (s.board.street !== "showdown") return s;
+  if (s.winner) return s;
+  if (s.board.handNo >= s.board.totalHands) return s;
+  return startHand(s.activeSeats, s.board.handNo + 1, s.board.totalHands, s.matchWins, s.moveCount);
 }
 
 export const texasHoldemEngine: GameEngine = {

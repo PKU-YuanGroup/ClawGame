@@ -1,4 +1,4 @@
-import { getEngine, initTexasHoldemMatchState, initUnoMatchState, texasHoldemHandleSeatLeave } from "./games/registry";
+import { getEngine, initTexasHoldemMatchState, initUnoMatchState, texasHoldemAdvanceShowdown, texasHoldemHandleSeatLeave } from "./games/registry";
 import type { MatchPlayer, MatchState, Seat } from "./games/types";
 import type { Env } from "./types";
 import type { ProtocolEnvelope, RoomCommandRequest, RoomCommandResponse } from "@openclaw/game-protocol";
@@ -63,6 +63,7 @@ interface WsMeta {
 }
 
 const PARTICIPANT_PRESENCE_TTL_MS = 30_000;
+const TEXAS_SHOWDOWN_PAUSE_MS = 10_000;
 
 export class GameRoomDO {
   private sockets = new Map<WebSocket, WsMeta>();
@@ -95,6 +96,7 @@ export class GameRoomDO {
       if (request.method === "POST" && url.pathname === "/chat") return await this.chatSend(request);
       if (request.method === "POST" && url.pathname === "/agent/touch") return await this.agentTouch();
       if (request.method === "POST" && url.pathname === "/agent/player-token") return await this.agentPlayerToken(request);
+      if (request.method === "POST" && url.pathname === "/agent/leave") return await this.agentLeave(request);
       if (request.method === "GET" && url.pathname === "/ws") return await this.connectWs(request);
       return json({ error: "Not Found" }, 404);
     } catch (err) {
@@ -150,7 +152,7 @@ export class GameRoomDO {
   webSocketClose(ws: WebSocket): void {
     const closedMeta = this.sockets.get(ws);
     this.sockets.delete(ws);
-    if (closedMeta?.player && !closedMeta.player.id.startsWith("openclaw:") && !this.isBotUserId(closedMeta.player.id)) {
+    if (closedMeta?.player && !closedMeta.player.id.startsWith("openclaw:") && !this.isBotParticipantId(closedMeta.player.id)) {
       void this.releasePlayerOnSocketClose(closedMeta.player.id);
     }
     void this.pushOnlineUpdate();
@@ -265,6 +267,15 @@ export class GameRoomDO {
     return json({ ok: true, playerId: player.id, playerToken: player.token, seat: player.seat });
   }
 
+  private async agentLeave(request: Request): Promise<Response> {
+    const data = await this.requireRoom();
+    const body = (await request.json().catch(() => ({}))) as { playerId?: string };
+    const playerId = String(body?.playerId || "").trim();
+    if (!playerId) return json({ error: "playerId is required" }, 400);
+    const removed = await this.removePlayerById(data, playerId);
+    return json({ ok: true, removed, alreadyLeft: !removed });
+  }
+
   private pruneInactiveAgent(data: RoomData): boolean {
     if (!data.agentLastSeenAt) return false;
     if (Date.now() - data.agentLastSeenAt < AGENT_IDLE_TTL_MS) return false;
@@ -279,7 +290,7 @@ export class GameRoomDO {
     data.players = data.players.filter((p) => {
       if (p.id.startsWith("openclaw:")) return false;
       // If an OpenClaw bot side times out, also prune its paired bot player.
-      if (this.isBotUserId(p.id) && inactiveParticipants.has(p.id)) return false;
+      if (this.isBotParticipantId(p.id) && inactiveParticipants.has(this.normalizeParticipantId(p.id))) return false;
       return true;
     });
 
@@ -416,17 +427,15 @@ export class GameRoomDO {
 
     const existingBotIds = new Set(
       data.players
-        .map((p) => p.id)
-        .filter((id) => id.startsWith(`bot:${ownerId}:`)),
+        .map((p) => this.normalizeParticipantId(p.id))
+        .filter((id) => id.startsWith("bot:")),
     );
     let index = 1;
-    while (existingBotIds.has(`bot:${ownerId}:${index}`)) index += 1;
+    while (existingBotIds.has(`bot:${index}`)) index += 1;
 
-    const botUserId = `bot:${ownerId}:${index}`;
-    const botOpenclawId = `openclaw:${botUserId}`;
+    const botPlayerId = `openclaw:bot:${index}`;
     try {
-      const joined = await this.joinByPlayerId(data, botUserId);
-      await this.joinByPlayerId(data, botOpenclawId);
+      const joined = await this.joinByPlayerId(data, botPlayerId);
       if (meta.role !== "player") {
         meta.role = "spectator";
         meta.player = undefined;
@@ -435,7 +444,7 @@ export class GameRoomDO {
       ws.send(JSON.stringify(this.envelope(data, "action_result", {
         kind: "join_bot",
         ok: true,
-        botId: botUserId,
+        botId: botPlayerId,
         seat: joined.seat,
       })));
       void this.runBotTurns(data);
@@ -462,11 +471,13 @@ export class GameRoomDO {
       }
 
       const isRoomOwner = ownerId === String(data.ownerId || "");
-      const allBotIds = data.players
-        .map((p) => p.id)
-        .filter((id) => id.startsWith("bot:"));
-      const ownedBotIds = allBotIds.filter((id) => id.startsWith(`bot:${ownerId}:`));
-      const removableBotIds = isRoomOwner ? allBotIds : ownedBotIds;
+      const removableBotIds = isRoomOwner
+        ? Array.from(new Set(
+          data.players
+            .map((p) => p.id)
+            .filter((id) => this.isBotParticipantId(id)),
+        ))
+        : [];
 
       if (!removableBotIds.length) {
         ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "remove_bot", ok: false, error: "bot not found" })));
@@ -485,8 +496,8 @@ export class GameRoomDO {
         targetBotId = matched;
       } else {
         targetBotId = removableBotIds.sort((a, b) => {
-          const ai = Number(a.split(":").pop() || 0);
-          const bi = Number(b.split(":").pop() || 0);
+          const ai = Number(this.normalizeParticipantId(a).split(":").pop() || 0);
+          const bi = Number(this.normalizeParticipantId(b).split(":").pop() || 0);
           return bi - ai;
         })[0];
       }
@@ -591,7 +602,6 @@ export class GameRoomDO {
 
     const seats = Array.from(new Set(
       data.players
-        .filter((p) => !String(p.id || "").startsWith("openclaw:"))
         .map((p) => String(p.seat || ""))
         .filter(Boolean),
     ));
@@ -790,8 +800,8 @@ export class GameRoomDO {
     return data.players.filter((p) => !p.id.startsWith("openclaw:")).length;
   }
 
-  private isBotUserId(id: string): boolean {
-    return id.startsWith("bot:");
+  private isBotParticipantId(id: string): boolean {
+    return this.normalizeParticipantId(id).startsWith("bot:");
   }
 
   private readyParticipantCount(data: RoomData): number {
@@ -807,7 +817,7 @@ export class GameRoomDO {
 
     let ready = 0;
     for (const [participantId, sides] of participants.entries()) {
-      if (this.isBotUserId(participantId)) {
+      if (this.isBotParticipantId(participantId)) {
         ready += 1;
         continue;
       }
@@ -825,7 +835,7 @@ export class GameRoomDO {
     for (const p of data.players) {
       const participantId = this.normalizeParticipantId(p.id);
       if (!participantId) continue;
-      if (this.isBotUserId(participantId)) return true;
+      if (this.isBotParticipantId(participantId)) return true;
       if (p.id.startsWith("openclaw:")) return true;
     }
     return false;
@@ -929,6 +939,7 @@ export class GameRoomDO {
   private async applyTurnTimeout(data: RoomData): Promise<boolean> {
     const state: any = data.state as any;
     if (state.status !== "playing") return false;
+    if (data.gameType === "texas_holdem" && String(state?.board?.street || "") === "showdown") return false;
 
     const clock = this.ensureClockState(data);
     const currentSeat = String(state.nextTurn || "");
@@ -959,10 +970,34 @@ export class GameRoomDO {
     return true;
   }
 
+  private maybeAdvanceTexasShowdown(data: RoomData): boolean {
+    if (data.gameType !== "texas_holdem") return false;
+    const state: any = data.state as any;
+    if (String(state?.status || "") !== "playing") return false;
+    if (String(state?.board?.street || "") !== "showdown") return false;
+    if (typeof state?.winner !== "undefined") return false;
+    if (!state?.winnerSummary) return false;
+
+    const until = Number(state.showdownUntil || 0);
+    if (!until) {
+      state.showdownUntil = Date.now() + TEXAS_SHOWDOWN_PAUSE_MS;
+      return true;
+    }
+    if (Date.now() < until) return false;
+
+    data.state = texasHoldemAdvanceShowdown(data.state) as MatchState;
+    delete (data.state as any).showdownUntil;
+    this.resetTurnClockForNext(data);
+    this.broadcastTurnPrompt(data);
+    return true;
+  }
+
   private async tickTimeoutByHeartbeat(): Promise<void> {
     const data = await this.load();
     if (!data) return;
-    const changed = await this.applyTurnTimeout(data);
+    const changedShowdown = this.maybeAdvanceTexasShowdown(data);
+    const changedTimeout = changedShowdown ? false : await this.applyTurnTimeout(data);
+    const changed = changedShowdown || changedTimeout;
     if (!changed) return;
     await this.save(data);
     await this.maybeScheduleDefaultAutoReset(data);
@@ -976,6 +1011,9 @@ export class GameRoomDO {
       throw new Error("Invalid invite code");
     }
     const participantId = this.normalizeParticipantId(playerId);
+    const participantSeat = this.isBotParticipantId(playerId)
+      ? data.players.find((p) => this.normalizeParticipantId(p.id) === participantId)?.seat
+      : undefined;
 
     const existed = data.players.find((p) => p.id === playerId);
     if (existed) {
@@ -992,10 +1030,10 @@ export class GameRoomDO {
       throw new Error("can only join before game starts");
     }
 
-    const seat = playerId.startsWith("openclaw:")
-      ? (data.players.find((p) => this.normalizeParticipantId(p.id) === participantId)?.seat || this.nextSeatFor(data))
-      : this.nextSeatFor(data);
-    if (!occupiedSeats.has(seat) && occupiedSeats.size >= maxParticipants) throw new Error("Room is full");
+    if (!participantSeat && occupiedSeats.size >= maxParticipants) {
+      throw new Error("Room is full");
+    }
+    const seat = participantSeat || this.nextSeatFor(data);
 
     const token = crypto.randomUUID();
     data.players.push({ id: playerId, seat, token });
@@ -1085,6 +1123,7 @@ export class GameRoomDO {
     data.players = data.players.filter((p) => p.id !== playerId);
     if (!data.rematch) data.rematch = { votes: {}, closed: false };
     const hasParticipantSideLeft = data.players.some((p) => this.normalizeParticipantId(p.id) === participantId);
+    const hasSharedSeatSideLeft = data.players.some((p) => this.normalizeParticipantId(p.id) === participantId && p.seat === leavingSeat);
     if (!hasParticipantSideLeft) {
       delete data.rematch.votes[participantId];
     }
@@ -1097,7 +1136,7 @@ export class GameRoomDO {
       this.sockets.set(socket, socketMeta);
     }
 
-    if (wasPlaying && leavingSeat && data.gameType !== "texas_holdem") {
+    if (!hasSharedSeatSideLeft && wasPlaying && leavingSeat && data.gameType !== "texas_holdem") {
       const state: any = data.state as any;
       state.status = "finished";
       state.winner = this.getOpponentSeat(data, leavingSeat) || "draw";
@@ -1113,7 +1152,7 @@ export class GameRoomDO {
       });
       this.moveAllPlayersToSpectators(data);
     }
-    if (wasPlaying && leavingSeat && data.gameType === "texas_holdem") {
+    if (!hasSharedSeatSideLeft && wasPlaying && leavingSeat && data.gameType === "texas_holdem") {
       data.state = texasHoldemHandleSeatLeave(data.state, leavingSeat) as MatchState;
       const state: any = data.state as any;
       const systemMsg = this.addSystemChat(data, `${leavingSeat} left the room.`);
@@ -1151,10 +1190,10 @@ export class GameRoomDO {
 
   private async removeParticipantById(data: RoomData, participantPlayerId: string): Promise<boolean> {
     const participantId = this.normalizeParticipantId(participantPlayerId);
-    const leavingSeats = data.players
+    const leavingSeats = Array.from(new Set(data.players
       .filter((p) => this.normalizeParticipantId(p.id) === participantId)
       .map((p) => String(p.seat || ""))
-      .filter(Boolean);
+      .filter(Boolean)));
     const existed = data.players.some((p) => this.normalizeParticipantId(p.id) === participantId);
     if (!existed) return false;
     const currentStatus = String((data.state as any)?.status || "");
@@ -1218,7 +1257,7 @@ export class GameRoomDO {
     }
 
     if (data.ownerId && this.normalizeParticipantId(data.ownerId) === participantId) {
-      const nextOwner = data.players.find((p) => !p.id.startsWith("openclaw:") && !this.isBotUserId(p.id));
+      const nextOwner = data.players.find((p) => !p.id.startsWith("openclaw:") && !this.isBotParticipantId(p.id));
       data.ownerId = nextOwner?.id;
     }
 
@@ -1262,6 +1301,11 @@ export class GameRoomDO {
         await this.save(data);
         return;
       }
+      if (this.maybeAdvanceTexasShowdown(data)) {
+        this.broadcast(data, "state_update", this.toSnapshot(data));
+        this.broadcast(data, "online_update", this.currentOnline(data));
+        await this.save(data);
+      }
 
       if (await this.applyTurnTimeout(data)) {
         this.broadcast(data, "state_update", this.toSnapshot(data));
@@ -1272,7 +1316,7 @@ export class GameRoomDO {
       }
 
       const nextSeat = (data.state as any).nextTurn as Seat;
-      const bot = data.players.find((p) => p.id.startsWith("bot:") && p.seat === nextSeat);
+      const bot = data.players.find((p) => this.isBotParticipantId(p.id) && p.seat === nextSeat);
       if (!bot) {
         await this.save(data);
         return;
@@ -1334,6 +1378,7 @@ export class GameRoomDO {
       }
 
       data.state = engine.applyMove(data.state, bot.seat, move);
+      this.maybeAdvanceTexasShowdown(data);
       this.resetTurnClockForNext(data);
       data.eventSeq = (data.eventSeq || 0) + 1;
 
@@ -1409,7 +1454,7 @@ export class GameRoomDO {
     }
 
     const humanParticipants = Array.from(
-      new Set(data.players.filter((p) => !p.id.startsWith("openclaw:") && !this.isBotUserId(p.id)).map((p) => p.id)),
+      new Set(data.players.filter((p) => !p.id.startsWith("openclaw:") && !this.isBotParticipantId(p.id)).map((p) => p.id)),
     );
     const everyoneAccepted = humanParticipants.length >= 2 && humanParticipants.every((id) => data.rematch?.votes?.[id] === true);
     const compositionSatisfied = this.hasOpenclawOrBotParticipant(data);
@@ -1445,10 +1490,10 @@ export class GameRoomDO {
     const data = await this.requireRoom();
     if (!body.requesterId || !body.targetUserId) throw new Error("requesterId and targetUserId are required");
     if (data.ownerId !== body.requesterId) throw new Error("only owner can transfer");
-    if (body.targetUserId.startsWith("openclaw:") || this.isBotUserId(body.targetUserId)) {
+    if (body.targetUserId.startsWith("openclaw:") || this.isBotParticipantId(body.targetUserId)) {
       throw new Error("target must be a real player");
     }
-    const exists = data.players.some((p) => p.id === body.targetUserId && !p.id.startsWith("openclaw:") && !this.isBotUserId(p.id));
+    const exists = data.players.some((p) => p.id === body.targetUserId && !p.id.startsWith("openclaw:") && !this.isBotParticipantId(p.id));
     if (!exists) throw new Error("target not in players");
     data.ownerId = body.targetUserId;
     await this.save(data);
@@ -1571,18 +1616,16 @@ export class GameRoomDO {
 
     const existingBotIds = new Set(
       data.players
-        .map((p) => p.id)
-        .filter((id) => id.startsWith(`bot:${requesterId}:`)),
+        .map((p) => this.normalizeParticipantId(p.id))
+        .filter((id) => id.startsWith("bot:")),
     );
     let index = 1;
-    while (existingBotIds.has(`bot:${requesterId}:${index}`)) index += 1;
+    while (existingBotIds.has(`bot:${index}`)) index += 1;
 
-    const botUserId = `bot:${requesterId}:${index}`;
-    const botOpenclawId = `openclaw:${botUserId}`;
-    const joined = await this.joinByPlayerId(data, botUserId);
-    await this.joinByPlayerId(data, botOpenclawId);
+    const botPlayerId = `openclaw:bot:${index}`;
+    const joined = await this.joinByPlayerId(data, botPlayerId);
     await this.runBotTurns(data);
-    return json({ ok: true, botId: botUserId, seat: joined.seat });
+    return json({ ok: true, botId: botPlayerId, seat: joined.seat });
   }
 
   private async move(request: Request): Promise<Response> {
@@ -1616,6 +1659,7 @@ export class GameRoomDO {
     const engine = getEngine(data.gameType);
     engine.validateMove(data.state, player.seat, move);
     data.state = engine.applyMove(data.state, player.seat, move);
+    this.maybeAdvanceTexasShowdown(data);
     this.resetTurnClockForNext(data);
     data.eventSeq = (data.eventSeq || 0) + 1;
     if ((data.state as any).status === "finished") {
