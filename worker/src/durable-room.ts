@@ -91,6 +91,7 @@ export class GameRoomDO {
       if (request.method === "POST" && url.pathname === "/room/join-bot") return await this.joinBotByRequester(request);
       if (request.method === "POST" && url.pathname === "/presence/touch") return await this.touchParticipantPresence(request);
       if (request.method === "GET" && url.pathname === "/state") return await this.stateView();
+      if (request.method === "POST" && url.pathname === "/state-for-player") return await this.stateViewForPlayer(request);
       if (request.method === "GET" && url.pathname === "/online") return await this.onlineView();
       if (request.method === "GET" && url.pathname === "/chat") return await this.chatList();
       if (request.method === "POST" && url.pathname === "/chat") return await this.chatSend(request);
@@ -225,7 +226,7 @@ export class GameRoomDO {
       capabilities: ["submit_action", "ping"],
       rules: getEngine(data.gameType).rules,
     })));
-    server.send(JSON.stringify(this.envelope(data, "sync_state", this.toSnapshot(data))));
+    server.send(JSON.stringify(this.envelope(data, "sync_state", this.toSnapshot(data, player?.seat))));
     server.send(JSON.stringify(this.envelope(data, "chat_history", { messages: (data.chats || []).slice(-100) })));
     server.send(JSON.stringify(this.envelope(data, "online_update", this.currentOnline(data))));
 
@@ -708,6 +709,12 @@ export class GameRoomDO {
   }
 
   private broadcast(data: RoomData, type: string, payload: unknown): void {
+    if (type === "state_update") {
+      for (const [ws, meta] of this.sockets.entries()) {
+        ws.send(JSON.stringify(this.envelope(data, type, this.toSnapshot(data, meta.player?.seat))));
+      }
+      return;
+    }
     const msg = JSON.stringify(this.envelope(data, type, payload));
     for (const ws of this.sockets.keys()) {
       ws.send(msg);
@@ -1652,7 +1659,7 @@ export class GameRoomDO {
         ok: true,
         seq: data.eventSeq || 0,
         actionId: actionId ? String(actionId) : undefined,
-        state: this.toSnapshot(data),
+        state: this.toSnapshot(data, player.seat),
       };
     }
 
@@ -1696,7 +1703,7 @@ export class GameRoomDO {
       ok: true,
       seq: data.eventSeq || 0,
       actionId: actionId ? String(actionId) : undefined,
-      state: this.toSnapshot(data),
+      state: this.toSnapshot(data, player.seat),
     };
   }
 
@@ -1793,6 +1800,14 @@ export class GameRoomDO {
     return json({ ...this.toSnapshot(data), seq: data.eventSeq || 0 });
   }
 
+  private async stateViewForPlayer(request: Request): Promise<Response> {
+    const data = await this.requireRoom();
+    const body = (await request.json().catch(() => ({}))) as { playerId?: string };
+    const playerId = String(body?.playerId || "").trim();
+    const viewerSeat = data.players.find((p) => p.id === playerId)?.seat;
+    return json({ ...this.toSnapshot(data, viewerSeat), seq: data.eventSeq || 0 });
+  }
+
   private async onlineView(): Promise<Response> {
     const data = await this.load();
     if (!data) return json({ users: [], openclaw: [], spectators: [] });
@@ -1835,11 +1850,14 @@ export class GameRoomDO {
     return data;
   }
 
-  private toSnapshot(data: RoomData): RoomSnapshot {
+  private toSnapshot(data: RoomData, viewerSeat?: string): RoomSnapshot {
     const engine = getEngine(data.gameType);
     const rawState: any = data.state as any;
     const stateSnapshot: any = engine.snapshot(data.state);
     if (stateSnapshot && typeof stateSnapshot === "object") {
+      if (data.gameType === "texas_holdem") {
+        this.redactTexasHoldemSnapshot(stateSnapshot, viewerSeat);
+      }
       if (typeof rawState?.autoResetAt === "number" && rawState.autoResetAt > 0) {
         stateSnapshot.autoResetAt = rawState.autoResetAt;
       }
@@ -1854,6 +1872,27 @@ export class GameRoomDO {
       state: stateSnapshot,
       rematch: data.rematch || { votes: {}, closed: false },
     };
+  }
+
+  private redactTexasHoldemSnapshot(stateSnapshot: any, viewerSeat?: string): void {
+    if (!stateSnapshot || typeof stateSnapshot !== "object") return;
+    const status = String(stateSnapshot?.status || "");
+    const street = String(stateSnapshot?.board?.street || "");
+    const revealAllHoleCards = status === "finished" || street === "showdown";
+    if (Array.isArray(stateSnapshot.deck)) {
+      stateSnapshot.deck = [];
+    }
+    const playersState = stateSnapshot.playersState;
+    if (!playersState || typeof playersState !== "object") return;
+    for (const [seat, playerState] of Object.entries(playersState)) {
+      if (!playerState || typeof playerState !== "object") continue;
+      const cards = Array.isArray((playerState as any).cards) ? ((playerState as any).cards as unknown[]) : [];
+      if (revealAllHoleCards || seat === viewerSeat) {
+        (playerState as any).cards = [...cards];
+      } else {
+        (playerState as any).cards = cards.map(() => "");
+      }
+    }
   }
 }
 

@@ -615,11 +615,15 @@ export default {
         if (!credential) return json({ error: "credential is required" }, 400);
         const boundUserId = await resolveUserByCredential(env, credential);
         if (!boundUserId) return json({ error: "invalid credential" }, 401);
+        const agentPlayerId = `openclaw:${boundUserId}`;
         const canonicalAgentId = String(boundUserId);
         const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(body.roomId));
         await stub.fetch("https://room/agent/touch", { method: "POST" });
         const cursor = Number(body.sinceSeq || 0);
-        const stateRes = await stub.fetch("https://room/state");
+        const stateRes = await stub.fetch("https://room/state-for-player", {
+          method: "POST",
+          body: JSON.stringify({ playerId: agentPlayerId }),
+        });
         const chatRes = await stub.fetch("https://room/chat");
         if (!stateRes.ok) return passthrough(stateRes);
         if (!chatRes.ok) return passthrough(chatRes);
@@ -631,7 +635,6 @@ export default {
         const nextTurn = String(state?.state?.nextTurn || "");
         const players = Array.isArray(state?.players) ? state.players : [];
 
-        const agentPlayerId = `openclaw:${canonicalAgentId}`;
         const me = players.find((p: any) => p?.id === agentPlayerId) || null;
 
         const yourTurn = Boolean(me?.seat) && status === "playing" && nextTurn === me.seat;
