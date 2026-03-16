@@ -23,6 +23,7 @@ type UserProfile = {
   avatarUrl?: string;
   clawNickname?: string;
   clawAvatarUrl?: string;
+  coins?: number;
   badgeDetails?: Array<{ id?: string; nameZh?: string; nameEn?: string; imageUrl?: string }>;
 };
 type Me = {
@@ -34,6 +35,7 @@ type Me = {
   clawAvatarUrl?: string;
   clawBio?: string;
   clawOwnerReview?: string;
+  coins?: number;
   badgeDetails?: Array<{ id?: string; nameZh?: string; nameEn?: string; imageUrl?: string }>;
 };
 type RoomEvent = ProtocolEnvelope<{ messages?: ChatMessage[]; users?: OnlineItem[]; openclaw?: OnlineItem[]; spectators?: OnlineItem[] } | ChatMessage>;
@@ -41,6 +43,7 @@ type RoomEvent = ProtocolEnvelope<{ messages?: ChatMessage[]; users?: OnlineItem
 const DEFAULT_AVATAR = "https://placehold.co/40x40/1e293b/e2e8f0?text=?";
 const ME_CACHE_KEY = "me_cache_v1";
 const UI_ACTION_TIMEOUT_MS = 8000;
+const TEXAS_ENTRY_COINS = 100;
 
 function getViewerId(userId?: string) {
   if (userId) return userId;
@@ -355,6 +358,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
         avatarUrl: me.avatarUrl ?? prev[me.id]?.avatarUrl,
         clawNickname: me.clawNickname ?? prev[me.id]?.clawNickname,
         clawAvatarUrl: me.clawAvatarUrl ?? prev[me.id]?.clawAvatarUrl,
+        coins: me.coins ?? prev[me.id]?.coins,
         badgeDetails: me.badgeDetails ?? prev[me.id]?.badgeDetails,
       },
     }));
@@ -1205,10 +1209,24 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const boardHeight = Number(gameState?.height || board.length || boardSize);
   const boardWidth = Number(gameState?.width || board[0]?.length || boardSize);
   const statusText = gameState?.status || "waiting";
+  const texasEntrySeatUsers: string[] = gameType === "texas_holdem"
+    ? Array.from(new Map(
+      (Array.isArray(snapshot?.players) ? snapshot.players : [])
+        .map((p: any) => ({ seat: String(p?.seat || ""), userId: normalizeProfileId(String(p?.id || "")) }))
+        .filter((p: { seat: string; userId: string }) => p.seat && p.userId && !p.userId.startsWith("guest") && !isBotId(p.userId))
+        .map((p: { seat: string; userId: string }) => [p.seat, p.userId] as const),
+    ).values()) as string[]
+    : [];
+  const texasEntryTotalCoins = texasEntrySeatUsers.length * TEXAS_ENTRY_COINS;
+  const myCoins = Number(me?.coins ?? profiles[me?.id || ""]?.coins ?? 0);
+  const texasEntryInsufficientUsers = texasEntrySeatUsers.filter((userId) => Number(profiles[userId]?.coins ?? (userId === me?.id ? myCoins : NaN)) < TEXAS_ENTRY_COINS);
+  const texasEntryInsufficientNames = texasEntryInsufficientUsers.map((userId) => displayNameById(userId)).filter(Boolean);
+  const canJoinTexasByCoins = gameType !== "texas_holdem" || myCoins >= TEXAS_ENTRY_COINS;
   const canStartManualGame = isOwner
     && statusText === "waiting"
     && (
       (gameType === "texas_holdem" && texasSeatCount >= 2)
+      || (gameType === "who_is_undercover" && texasSeatCount >= 3 && texasSeatCount <= 8)
       || (gameType === "uno" && texasSeatCount >= 2 && texasSeatCount <= 4)
     );
   const isGameFinished = statusText === "finished" || Boolean((gameState as any)?.winner) || Boolean(gameOverWinner);
@@ -1226,6 +1244,10 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const mySeat = String(
     (Array.isArray(snapshot?.players) ? snapshot.players : []).find((p: any) => String(p?.id || "") === myUserId)?.seat || "",
   );
+  const undercoverBoard = ((gameState as any)?.board || {}) as any;
+  const myUndercoverWord = String(undercoverBoard?.myWord || undercoverBoard?.words?.[mySeat] || "");
+  const myUndercoverRole = String(undercoverBoard?.myRole || "");
+  const myUndercoverWordLabel = myUndercoverWord ? t(`room.undercoverWords.${myUndercoverWord}`) : "";
   const isMyTurn = Boolean(mySeat) && turnText === mySeat;
   const canActNow = canSubmitMove && isMyTurn;
   const moveDisabledReason = !joinedAsPlayer
@@ -1322,6 +1344,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const profileCardProfile = profileCard ? profileByAnyId(profileCard.id) : null;
   const profileCardBadges = Array.isArray((profileCardProfile as any)?.badgeDetails) ? (profileCardProfile as any).badgeDetails : [];
   const profileCardOwnerId = profileCard?.type === "openclaw" && !isBotId(profileCard.id) ? normalizeProfileId(profileCard.id) : "";
+  const profileCardCoins = Number((profileCardProfile as any)?.coins || 0);
   const canFollowProfile = Boolean(profileCard && profileCard.type === "user" && me?.id && profileCardNormalizedId && profileCardNormalizedId !== me.id);
   const isFollowingProfile = Boolean(profileCardNormalizedId) && followingIds.includes(profileCardNormalizedId);
   const canRemoveProfileBot = Boolean(
@@ -1426,9 +1449,9 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const unoTopParsed = parseUnoCard(unoTopCard);
   const unoPlayableCards = new Set(
     myUnoHand.filter((card) => {
-      if (unoPendingDraw > 0) return false;
       const parsed = parseUnoCard(card);
       if (!parsed) return false;
+      if (unoPendingDraw > 0) return card === "W4" || parsed.badge === "+2";
       if (card === "W4" && myUnoHand.some((handCard) => {
         const handParsed = parseUnoCard(handCard);
         return Boolean(handParsed && handParsed.color !== "W" && handParsed.color === unoCurrentColor);
@@ -1669,7 +1692,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
                   className="inline-flex h-8 items-center justify-center rounded px-2 text-xs font-semibold text-white disabled:opacity-50"
                   style={{ background: "var(--accent)" }}
                   onClick={joinGame}
-                  disabled={!me?.id || joining || joinedAsPlayer}
+                  disabled={!me?.id || joining || joinedAsPlayer || !canJoinTexasByCoins}
                 >
                   {joinedAsPlayer ? t("room.joined") : joining ? t("room.joining") : t("room.joinAsPlayer")}
                 </button>
@@ -1677,7 +1700,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
                   className="inline-flex h-8 items-center justify-center rounded border px-2 text-xs font-semibold disabled:opacity-50"
                   style={{ borderColor: "var(--border)", color: "var(--fg)" }}
                   onClick={joinOpenclawGame}
-                  disabled={openclawJoining}
+                  disabled={openclawJoining || !canJoinTexasByCoins}
                 >
                   {openclawJoining ? t("room.joining") : t("room.copyOpenclawPrompt")}
                 </button>
@@ -2304,6 +2327,18 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
                       </div>
                     </div>
                   ) : null}
+                  <div
+                    className="absolute bottom-4 right-4 rounded-2xl border px-4 py-2.5 text-right"
+                    style={{
+                      borderColor: "rgba(246,241,221,0.18)",
+                      background: "rgba(4,12,10,0.62)",
+                      backdropFilter: "blur(8px)",
+                      color: "#f6f1dd",
+                    }}
+                  >
+                    <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "rgba(246,241,221,0.68)" }}>Balance</div>
+                    <div className="mt-1 text-lg font-semibold tabular-nums">{myCoins}</div>
+                  </div>
                   </div>
                   {renderPlayerRail()}
                 </div>
@@ -2374,6 +2409,16 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
                     <div className="text-xl font-semibold" style={{ color: "#fff1f6" }}>Phase: {String((gameState as any)?.board?.phase || "clue")}</div>
                   </div>
                   <div className="text-sm" style={{ color: "rgba(255,241,246,0.72)" }}>Round {Number((gameState as any)?.board?.round || 1)}</div>
+                </div>
+                <div className="mb-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff1f6" }}>
+                    <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: "rgba(255,241,246,0.66)" }}>{lang === "zh" ? "你的关键词" : "Your Keyword"}</div>
+                    <div className="mt-1 text-lg font-semibold">{myUndercoverWordLabel || (lang === "zh" ? "等待房主开始游戏" : "Waiting for owner to start")}</div>
+                  </div>
+                  <div className="rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff1f6" }}>
+                    <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: "rgba(255,241,246,0.66)" }}>{lang === "zh" ? "你的身份" : "Your Role"}</div>
+                    <div className="mt-1 text-lg font-semibold">{myUndercoverRole ? (myUndercoverRole === "undercover" ? (lang === "zh" ? "卧底" : "Undercover") : (lang === "zh" ? "平民" : "Civilian")) : "-"}</div>
+                  </div>
                 </div>
                 <div className="mb-4 rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff1f6" }}>
                   {String((gameState as any)?.board?.reveal || "Clues are circulating. Someone at the table is off by one word.")}
@@ -2765,6 +2810,14 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
             ) : (
               <div className="mt-3 text-xs text-slate-400">{t("room.master")}: {profileCardOwnerId ? displayNameById(profileCardOwnerId) : "-"}</div>
             )}
+
+            <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-3">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-amber-200/80">{t("room.coinsLabel")}</div>
+              <div className="mt-1 flex items-end justify-between gap-3">
+                <div className="text-2xl font-semibold text-amber-100">{profileCardCoins}</div>
+                <div className="text-[11px] text-amber-100/70">{t("room.coinsUnit")}</div>
+              </div>
+            </div>
           </div>
         </div>
       ) : null}

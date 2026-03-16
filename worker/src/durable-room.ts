@@ -1,8 +1,8 @@
-import { getEngine, initTexasHoldemMatchState, initUnoMatchState, texasHoldemAdvanceShowdown, texasHoldemHandleSeatLeave } from "./games/registry";
+import { getEngine, initTexasHoldemMatchState, initUnoMatchState, initWhoIsUndercoverMatchState, texasHoldemAdvanceShowdown, texasHoldemHandleSeatLeave } from "./games/registry";
 import type { MatchPlayer, MatchState, Seat } from "./games/types";
-import type { Env } from "./types";
+import type { Env, UserProfile } from "./types";
 import type { ProtocolEnvelope, RoomCommandRequest, RoomCommandResponse } from "@openclaw/game-protocol";
-import { storeDelete } from "./lib/store";
+import { storeDelete, storeGet, storePut } from "./lib/store";
 import {
   AGENT_IDLE_TTL_MS,
   BOT_MOVE_DELAY_MS,
@@ -64,6 +64,8 @@ interface WsMeta {
 
 const PARTICIPANT_PRESENCE_TTL_MS = 30_000;
 const TEXAS_SHOWDOWN_PAUSE_MS = 10_000;
+const WIN_REWARD_COINS = 100;
+const TEXAS_ENTRY_COINS = 100;
 
 export class GameRoomDO {
   private sockets = new Map<WebSocket, WsMeta>();
@@ -592,8 +594,8 @@ export class GameRoomDO {
       ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: "only room owner can start game" })));
       return;
     }
-    if (data.gameType !== "texas_holdem" && data.gameType !== "uno") {
-      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: "manual start is only enabled for texas hold'em and uno" })));
+    if (!this.isManualStartGame(data.gameType)) {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: "manual start is not enabled for this game" })));
       return;
     }
     if (String((data.state as any)?.status || "") !== "waiting") {
@@ -609,7 +611,7 @@ export class GameRoomDO {
     const minPlayers = Number(getEngine(data.gameType).minPlayers || 2);
     const maxPlayers = Number(getEngine(data.gameType).maxPlayers || seats.length || 2);
     if (seats.length < minPlayers) {
-      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: "at least 2 players are required" })));
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: `at least ${minPlayers} players are required` })));
       return;
     }
     if (seats.length > maxPlayers) {
@@ -617,14 +619,19 @@ export class GameRoomDO {
       return;
     }
 
-    data.state = data.gameType === "texas_holdem"
-      ? (initTexasHoldemMatchState(seats) as MatchState)
-      : (initUnoMatchState(seats) as MatchState);
+    try {
+      await this.chargeTexasEntryCoins(data);
+    } catch (err) {
+      ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: false, error: (err as Error).message })));
+      return;
+    }
+
+    data.state = this.initMatchStateForSeats(data.gameType, seats);
     delete (data.state as any).settlementPlayers;
     this.clearDefaultRoomAutoReset(data);
     data.eventSeq = (data.eventSeq || 0) + 1;
 
-    const systemMsg = this.addSystemChat(data, `Owner started ${data.gameType === "uno" ? "UNO" : "Texas Hold'em"} match.`);
+    const systemMsg = this.addSystemChat(data, `Owner started ${data.gameType.replace(/_/g, " ")} match.`);
     if (systemMsg) this.broadcast(data, "chat", systemMsg);
 
     await this.save(data);
@@ -929,6 +936,90 @@ export class GameRoomDO {
     delete state.winner;
     delete state.finishReason;
     delete state.autoResetAt;
+    delete state.coinRewardGranted;
+  }
+
+  private async awardWinnerCoinsIfNeeded(data: RoomData): Promise<void> {
+    const state: any = data.state as any;
+    if (String(state?.status || "") !== "finished") return;
+    if (state.coinRewardGranted) return;
+
+    const winnerSeat = String(state?.winner || "");
+    if (!winnerSeat || winnerSeat === "draw") {
+      state.coinRewardGranted = true;
+      return;
+    }
+
+    const settlementPlayers = Array.isArray(state?.settlementPlayers) ? state.settlementPlayers : [];
+    const winnerPlayer =
+      data.players.find((p) => String(p.seat || "") === winnerSeat) ||
+      settlementPlayers.find((p: any) => String(p?.seat || "") === winnerSeat);
+    const winnerId = String(winnerPlayer?.id || "");
+    const winnerUserId = this.normalizeParticipantId(winnerId);
+
+    if (!winnerUserId || winnerUserId.startsWith("guest") || this.isBotParticipantId(winnerUserId)) {
+      state.coinRewardGranted = true;
+      return;
+    }
+
+    const profile = (await storeGet(this.env, `user:${winnerUserId}`, "json")) as UserProfile | null;
+    if (!profile) {
+      state.coinRewardGranted = true;
+      return;
+    }
+
+    profile.coins = Number(profile.coins || 0) + WIN_REWARD_COINS;
+    profile.updatedAt = Date.now();
+    await storePut(this.env, `user:${winnerUserId}`, JSON.stringify(profile));
+    state.coinRewardGranted = true;
+  }
+
+  private getTexasEntryUserIds(data: RoomData): string[] {
+    if (data.gameType !== "texas_holdem") return [];
+    const userIds = new Set<string>();
+    const seenSeats = new Set<string>();
+    for (const player of data.players) {
+      const seat = String(player.seat || "");
+      if (!seat || seenSeats.has(seat)) continue;
+      const userId = this.normalizeParticipantId(player.id);
+      if (!userId || userId.startsWith("guest") || this.isBotParticipantId(userId)) continue;
+      seenSeats.add(seat);
+      userIds.add(userId);
+    }
+    return [...userIds];
+  }
+
+  private async chargeTexasEntryCoins(data: RoomData): Promise<void> {
+    const userIds = this.getTexasEntryUserIds(data);
+    if (!userIds.length) return;
+
+    const profiles = new Map<string, UserProfile>();
+    for (const userId of userIds) {
+      const profile = (await storeGet(this.env, `user:${userId}`, "json")) as UserProfile | null;
+      if (!profile) throw new Error(`player profile not found: ${userId}`);
+      const coins = Number(profile.coins || 0);
+      if (coins < TEXAS_ENTRY_COINS) {
+        const displayName = profile.nickname || profile.username || profile.name || profile.login || userId;
+        throw new Error(`${displayName} does not have enough coins (${TEXAS_ENTRY_COINS} required)`);
+      }
+      profiles.set(userId, profile);
+    }
+
+    for (const [userId, profile] of profiles.entries()) {
+      profile.coins = Number(profile.coins || 0) - TEXAS_ENTRY_COINS;
+      profile.updatedAt = Date.now();
+      await storePut(this.env, `user:${userId}`, JSON.stringify(profile));
+    }
+  }
+
+  private async ensureTexasJoinCoins(playerId: string): Promise<void> {
+    const userId = this.normalizeParticipantId(playerId);
+    if (!userId || userId.startsWith("guest") || this.isBotParticipantId(userId)) return;
+    const profile = (await storeGet(this.env, `user:${userId}`, "json")) as UserProfile | null;
+    if (!profile) throw new Error("player profile not found");
+    if (Number(profile.coins || 0) < TEXAS_ENTRY_COINS) {
+      throw new Error("not enough coins to join texas hold'em");
+    }
   }
 
   private resetIfWaitingAndEmpty(data: RoomData): void {
@@ -973,6 +1064,7 @@ export class GameRoomDO {
       reason: "timeout",
       moveCount: Number(state.moveCount || 0),
     });
+    await this.awardWinnerCoinsIfNeeded(data);
     this.moveAllPlayersToSpectators(data);
     return true;
   }
@@ -1031,6 +1123,10 @@ export class GameRoomDO {
       return { playerToken: existed.token, seat: existed.seat };
     }
 
+    if (data.gameType === "texas_holdem" && String((data.state as any)?.status || "") === "waiting") {
+      await this.ensureTexasJoinCoins(playerId);
+    }
+
     const maxParticipants = this.gameMaxParticipants(data.gameType);
     const occupiedSeats = new Set(data.players.map((p) => p.seat));
     if ((data.gameType === "texas_holdem" || data.gameType === "uno") && String((data.state as any)?.status || "") === "playing") {
@@ -1048,7 +1144,7 @@ export class GameRoomDO {
 
     const readyParticipants = this.readyParticipantCount(data);
     const hasRequiredNonHuman = this.hasOpenclawOrBotParticipant(data);
-    const canAutoStart = data.gameType !== "texas_holdem" && data.gameType !== "uno";
+    const canAutoStart = !this.isManualStartGame(data.gameType);
     if (
       canAutoStart
       && readyParticipants >= this.gameMinParticipants(data.gameType)
@@ -1157,6 +1253,7 @@ export class GameRoomDO {
         reason: "player_left",
         moveCount: Number(state.moveCount || 0),
       });
+      await this.awardWinnerCoinsIfNeeded(data);
       this.moveAllPlayersToSpectators(data);
     }
     if (!hasSharedSeatSideLeft && wasPlaying && leavingSeat && data.gameType === "texas_holdem") {
@@ -1166,6 +1263,7 @@ export class GameRoomDO {
       if (systemMsg) this.broadcast(data, "chat", systemMsg);
       if (String(state?.status || "") === "finished") {
         this.markDefaultRoomAutoReset(data);
+        await this.awardWinnerCoinsIfNeeded(data);
         this.broadcast(data, "game_over", {
           winner: state.winner ?? "draw",
           reason: state.finishReason || "showdown",
@@ -1234,6 +1332,7 @@ export class GameRoomDO {
         reason: "player_left",
         moveCount: Number(state.moveCount || 0),
       });
+      await this.awardWinnerCoinsIfNeeded(data);
       this.moveAllPlayersToSpectators(data);
     }
     if (wasPlaying && leavingSeats.length > 0 && data.gameType === "texas_holdem") {
@@ -1245,6 +1344,7 @@ export class GameRoomDO {
       if (systemMsg) this.broadcast(data, "chat", systemMsg);
       if (String(state?.status || "") === "finished") {
         this.markDefaultRoomAutoReset(data);
+        await this.awardWinnerCoinsIfNeeded(data);
         this.broadcast(data, "game_over", {
           winner: state.winner ?? "draw",
           reason: state.finishReason || "showdown",
@@ -1353,6 +1453,7 @@ export class GameRoomDO {
           reason: "no_legal_move",
           moveCount: (data.state as any).moveCount,
         });
+        await this.awardWinnerCoinsIfNeeded(data);
         this.moveAllPlayersToSpectators(data);
         this.broadcast(data, "state_update", this.toSnapshot(data));
         this.broadcast(data, "online_update", this.currentOnline(data));
@@ -1376,6 +1477,7 @@ export class GameRoomDO {
           reason: "illegal_bot_move",
           moveCount: (data.state as any).moveCount,
         });
+        await this.awardWinnerCoinsIfNeeded(data);
         this.moveAllPlayersToSpectators(data);
         this.broadcast(data, "state_update", this.toSnapshot(data));
         this.broadcast(data, "online_update", this.currentOnline(data));
@@ -1398,6 +1500,7 @@ export class GameRoomDO {
           winner: (data.state as any).winner ?? "draw",
           moveCount: (data.state as any).moveCount,
         });
+        await this.awardWinnerCoinsIfNeeded(data);
         this.moveAllPlayersToSpectators(data);
       }
 
@@ -1678,6 +1781,7 @@ export class GameRoomDO {
         winner: (data.state as any).winner ?? "draw",
         moveCount: (data.state as any).moveCount,
       });
+      await this.awardWinnerCoinsIfNeeded(data);
       this.moveAllPlayersToSpectators(data);
     } else {
       this.broadcastTurnPrompt(data);
@@ -1858,6 +1962,9 @@ export class GameRoomDO {
       if (data.gameType === "texas_holdem") {
         this.redactTexasHoldemSnapshot(stateSnapshot, viewerSeat);
       }
+      if (data.gameType === "who_is_undercover") {
+        this.redactUndercoverSnapshot(stateSnapshot, viewerSeat);
+      }
       if (typeof rawState?.autoResetAt === "number" && rawState.autoResetAt > 0) {
         stateSnapshot.autoResetAt = rawState.autoResetAt;
       }
@@ -1893,6 +2000,34 @@ export class GameRoomDO {
         (playerState as any).cards = cards.map(() => "");
       }
     }
+  }
+
+  private redactUndercoverSnapshot(stateSnapshot: any, viewerSeat?: string): void {
+    if (!stateSnapshot || typeof stateSnapshot !== "object") return;
+    const board = stateSnapshot.board;
+    if (!board || typeof board !== "object") return;
+    const status = String(stateSnapshot?.status || "");
+    const words = board.words && typeof board.words === "object" ? board.words : {};
+    const roles = board.roles && typeof board.roles === "object" ? board.roles : {};
+
+    board.myWord = viewerSeat ? String(words[viewerSeat] || "") : "";
+    board.myRole = viewerSeat ? String(roles[viewerSeat] || "") : "";
+
+    if (status !== "finished") {
+      board.words = viewerSeat && words[viewerSeat] ? { [viewerSeat]: words[viewerSeat] } : {};
+      delete board.roles;
+    }
+  }
+
+  private isManualStartGame(gameType: string): boolean {
+    return Boolean(getEngine(gameType)?.rules?.manualStartByOwner);
+  }
+
+  private initMatchStateForSeats(gameType: string, seats: Seat[]): MatchState {
+    if (gameType === "texas_holdem") return initTexasHoldemMatchState(seats) as MatchState;
+    if (gameType === "uno") return initUnoMatchState(seats) as MatchState;
+    if (gameType === "who_is_undercover") return initWhoIsUndercoverMatchState(seats) as MatchState;
+    return getEngine(gameType).initState();
   }
 }
 

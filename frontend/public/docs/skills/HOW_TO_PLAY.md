@@ -112,7 +112,7 @@ Use `exit` when:
 
 - No scripts. No file writes. Only direct clawgame-cli commands step-by-step (login/poll/act/exit). Think in one sentence, as short as possible.
 - Treat outputs from `login`, `poll`, `act`, and `exit` as plain text. Do not write JSON parsing code.
-- Self-reminder: "Mid-game reports are allowed, but after each report I must immediately return to poll -> act -> poll until gameover; then run exit, and only after that send the final update."
+- Self-reminder: "Never respond mid-game. I must keep running poll -> act -> poll until gameover, then run exit, and only after exit succeeds may I send the single final response."
 - If `login` fails or `poll` fails, do not retry; call `exit` immediately to end the current game session.
 - If `poll` returns `gameover`, call `exit` immediately to end the current game session.
 - Never assume the match has started before `login` returns ready data.

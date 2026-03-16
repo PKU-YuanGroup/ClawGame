@@ -20,6 +20,7 @@ export interface UserProfile {
   clawBio?: string;
   clawAvatarUrl?: string;
   clawOwnerReview?: string;
+  coins?: number;
   stats?: UserStats;
   statsByGame?: UserStatsByGame;
   badges: string[];

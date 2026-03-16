@@ -4,6 +4,8 @@ import type { Env, UserProfile } from "../types";
 import { BADGE_WELCOME, ensureBadgeTable, grantBadgeToUser, getUserBadgeIds } from "../lib/badges";
 import { storeDelete, storeGet, storePut } from "../lib/store";
 
+const DEFAULT_STARTER_COINS = 5000;
+
 export async function handleAuthRoutes(request: Request, env: Env, url: URL): Promise<Response | null> {
   if (url.pathname === "/api/auth/github/start") {
     const state = crypto.randomUUID();
@@ -62,6 +64,7 @@ export async function handleAuthRoutes(request: Request, env: Env, url: URL): Pr
       clawBio: "",
       clawAvatarUrl: "",
       clawOwnerReview: "",
+      coins: DEFAULT_STARTER_COINS,
       stats: { wins: 0, losses: 0, draws: 0, totalGames: 0 },
       badges: [],
       updatedAt: Date.now(),
@@ -79,6 +82,7 @@ export async function handleAuthRoutes(request: Request, env: Env, url: URL): Pr
       profile.clawBio = ex.clawBio ?? "";
       profile.clawAvatarUrl = ex.clawAvatarUrl ?? "";
       profile.clawOwnerReview = ex.clawOwnerReview ?? "";
+      profile.coins = ex.coins ?? DEFAULT_STARTER_COINS;
       profile.stats = ex.stats ?? { wins: 0, losses: 0, draws: 0, totalGames: 0 };
       profile.badges = ex.badges ?? [];
     } else {

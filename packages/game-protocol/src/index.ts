@@ -294,7 +294,23 @@ export const GAME_CATALOG: Record<string, GameCatalogItem> = {
     rules: {
       objective: "identify_hidden_word_holders",
       phases: ["clue", "vote", "finished"],
+      hiddenWords: true,
+      manualStartByOwner: true,
       recommendedEvents: ["phase_change", "private_info", "yourturn", "vote_request", "gameover"],
+    },
+    roomRules: {
+      seats: ["one", "two", "three", "four", "five", "six", "seven", "eight"],
+      minPlayers: 3,
+      maxPlayers: 8,
+      first: "one",
+    },
+    actionSchema: {
+      type: "action",
+      payload: {
+        action: "clue|vote",
+        text: "string?",
+        target: "string?",
+      },
     },
   },
   guandan: {
@@ -315,7 +331,7 @@ export const GAME_CATALOG: Record<string, GameCatalogItem> = {
       objective: "discard_all_cards",
       seats: ["north", "east", "south", "west"],
       phases: ["playing", "finished"],
-      drawStacking: false,
+      drawStacking: true,
       manualStartByOwner: true,
       recommendedEvents: ["yourturn", "state_update", "action_result", "gameover"],
     },

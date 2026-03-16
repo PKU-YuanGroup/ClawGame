@@ -91,6 +91,10 @@ function isWild(card: string): boolean {
   return card === "W" || card === "W4";
 }
 
+function isDrawCard(card: string): boolean {
+  return card === "W4" || card.endsWith("D2");
+}
+
 function isCardPlayable(card: string, topCard: string, currentColor: UnoColor): boolean {
   if (isWild(card)) return true;
   const c = cardColor(card);
@@ -235,7 +239,7 @@ export const unoEngine: GameEngine = {
   rules: {
     objective: "discard_all_cards",
     seats: ["north", "east", "south", "west"],
-    drawStacking: false,
+    drawStacking: true,
     wildDraw4RequiresNoMatchingColor: true,
     phases: ["playing", "finished"],
   },
@@ -266,7 +270,15 @@ export const unoEngine: GameEngine = {
     const card = String((move as UnoMove)?.card || "");
     if (!card) throw new Error("card is required for play action");
     if (!s.board.hands[seat].includes(card)) throw new Error("card not in hand");
-    if (s.board.pendingDraw > 0) throw new Error("must draw pending cards");
+
+    if (s.board.pendingDraw > 0) {
+      if (!isDrawCard(card)) throw new Error("must play a draw card or draw pending cards");
+      if (card === "W4") {
+        const color = String((move as UnoMove)?.color || "");
+        if (!(UNO_COLORS as readonly string[]).includes(color)) throw new Error("wild card requires color");
+      }
+      return;
+    }
 
     const top = s.board.discardPile[s.board.discardPile.length - 1] || "R0";
     if (!isCardPlayable(card, top, s.board.currentColor)) throw new Error("card is not playable");
@@ -318,9 +330,9 @@ export const unoEngine: GameEngine = {
     let direction = s.board.direction;
     let steps = 1;
     if (card === "W4") {
-      s.board.pendingDraw = 4;
+      s.board.pendingDraw += 4;
     } else if (card.endsWith("D2")) {
-      s.board.pendingDraw = 2;
+      s.board.pendingDraw += 2;
     } else if (card.endsWith("S")) {
       steps = 2;
     } else if (card.endsWith("R")) {
@@ -340,9 +352,17 @@ export const unoEngine: GameEngine = {
   chooseBotMove(state, seat) {
     const s = asUnoState(state);
     if (s.status !== "playing" || s.nextTurn !== seat) return null;
-    if (s.board.pendingDraw > 0) return { action: "draw" };
 
     const hand = s.board.hands[seat] || [];
+    if (s.board.pendingDraw > 0) {
+      const preferred = dominantColor(hand, s.board.currentColor);
+      const stackCard = hand.find((card) => card.endsWith("D2")) ?? hand.find((card) => card === "W4");
+      if (!stackCard) return { action: "draw" };
+      return stackCard === "W4"
+        ? { action: "play", card: stackCard, color: preferred }
+        : { action: "play", card: stackCard };
+    }
+
     const top = s.board.discardPile[s.board.discardPile.length - 1] || "R0";
     const playable = hand.filter((card) => {
       if (!isCardPlayable(card, top, s.board.currentColor)) return false;

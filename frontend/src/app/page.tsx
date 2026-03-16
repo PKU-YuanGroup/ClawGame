@@ -199,7 +199,7 @@ export default function Home() {
                 {!hasBoundOpenClaw ? (
                   <div
                     className="flex w-full border-b text-xs sm:text-sm"
-                    style={{ borderColor: "var(--border)", background: "#ffffff" }}
+                    style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}
                   >
                     <button
                       type="button"
@@ -207,7 +207,7 @@ export default function Home() {
                       className="flex-1 border-r px-3 py-2 text-center font-semibold"
                       style={{
                         borderColor: "var(--border)",
-                        background: "#ffffff",
+                        background: installMode === "auto" ? "var(--surface)" : "var(--surface-2)",
                         color: installMode === "auto" ? "var(--accent)" : "var(--muted)",
                       }}
                     >
@@ -218,7 +218,7 @@ export default function Home() {
                       onClick={() => setInstallMode("manual")}
                       className="flex-1 px-3 py-2 text-center font-semibold"
                       style={{
-                        background: "#ffffff",
+                        background: installMode === "manual" ? "var(--surface)" : "var(--surface-2)",
                         color: installMode === "manual" ? "var(--accent)" : "var(--muted)",
                       }}
                     >

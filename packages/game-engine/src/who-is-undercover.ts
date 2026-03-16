@@ -1,8 +1,64 @@
 import type { GameEngine, MatchState, Seat } from "./types.ts";
 
 const UNDERCOVER_SEATS = ["one", "two", "three", "four", "five", "six", "seven", "eight"] as const;
-const CIVILIAN_WORD = "Aurora";
-const UNDERCOVER_WORD = "Nebula";
+const WORD_BANK = [
+  { civilian: "aurora", undercover: "nebula" },
+  { civilian: "coffee", undercover: "tea" },
+  { civilian: "piano", undercover: "violin" },
+  { civilian: "robot", undercover: "android" },
+  { civilian: "volcano", undercover: "geyser" },
+  { civilian: "ocean", undercover: "lake" },
+  { civilian: "apple", undercover: "pear" },
+  { civilian: "cat", undercover: "fox" },
+  { civilian: "train", undercover: "subway" },
+  { civilian: "doctor", undercover: "nurse" },
+  { civilian: "moon", undercover: "planet" },
+  { civilian: "sword", undercover: "dagger" },
+  { civilian: "notebook", undercover: "tablet" },
+  { civilian: "spring", undercover: "autumn" },
+  { civilian: "rain", undercover: "snow" },
+  { civilian: "soccer", undercover: "basketball" },
+  { civilian: "camera", undercover: "camcorder" },
+  { civilian: "pancake", undercover: "waffle" },
+  { civilian: "forest", undercover: "jungle" },
+  { civilian: "bridge", undercover: "tunnel" },
+  { civilian: "bread", undercover: "cake" },
+  { civilian: "burger", undercover: "sandwich" },
+  { civilian: "noodles", undercover: "pasta" },
+  { civilian: "rice", undercover: "porridge" },
+  { civilian: "bicycle", undercover: "motorcycle" },
+  { civilian: "airplane", undercover: "helicopter" },
+  { civilian: "ship", undercover: "submarine" },
+  { civilian: "bus", undercover: "coach" },
+  { civilian: "lion", undercover: "tiger" },
+  { civilian: "wolf", undercover: "dog" },
+  { civilian: "eagle", undercover: "hawk" },
+  { civilian: "shark", undercover: "dolphin" },
+  { civilian: "teacher", undercover: "professor" },
+  { civilian: "police", undercover: "detective" },
+  { civilian: "chef", undercover: "baker" },
+  { civilian: "pilot", undercover: "captain" },
+  { civilian: "desert", undercover: "beach" },
+  { civilian: "mountain", undercover: "hill" },
+  { civilian: "river", undercover: "waterfall" },
+  { civilian: "island", undercover: "peninsula" },
+  { civilian: "computer", undercover: "server" },
+  { civilian: "keyboard", undercover: "mouse" },
+  { civilian: "browser", undercover: "search_engine" },
+  { civilian: "wifi", undercover: "bluetooth" },
+  { civilian: "movie", undercover: "tv_series" },
+  { civilian: "novel", undercover: "comic" },
+  { civilian: "guitar", undercover: "ukulele" },
+  { civilian: "drum", undercover: "tambourine" },
+  { civilian: "hospital", undercover: "clinic" },
+  { civilian: "school", undercover: "library" },
+  { civilian: "bank", undercover: "vault" },
+  { civilian: "museum", undercover: "gallery" },
+  { civilian: "shirt", undercover: "jacket" },
+  { civilian: "shoes", undercover: "boots" },
+  { civilian: "hat", undercover: "helmet" },
+  { civilian: "glasses", undercover: "goggles" },
+] as const;
 
 interface UndercoverMove {
   action: "clue" | "vote";
@@ -24,28 +80,43 @@ interface UndercoverState extends MatchState {
   };
 }
 
-function buildState(): UndercoverState {
+function normalizeSeats(input: Seat[]): Seat[] {
+  const unique = Array.from(new Set(input.filter(Boolean)));
+  return UNDERCOVER_SEATS.filter((seat) => unique.includes(seat));
+}
+
+function pickWordPair(seats: Seat[]): { civilian: string; undercover: string } {
+  const seed = seats.join("|");
+  let acc = 0;
+  for (const ch of seed) acc = (acc * 33 + ch.charCodeAt(0)) >>> 0;
+  return WORD_BANK[acc % WORD_BANK.length];
+}
+
+function buildState(seats: Seat[] = []): UndercoverState {
+  const activeSeats = normalizeSeats(seats);
   const roles: Record<Seat, "civilian" | "undercover"> = {};
   const words: Record<Seat, string> = {};
-  UNDERCOVER_SEATS.forEach((seat, index) => {
-    const undercover = index < 2;
+  const pair = pickWordPair(activeSeats);
+  const undercoverCount = activeSeats.length >= 6 ? 2 : 1;
+  activeSeats.forEach((seat, index) => {
+    const undercover = index < undercoverCount;
     roles[seat] = undercover ? "undercover" : "civilian";
-    words[seat] = undercover ? UNDERCOVER_WORD : CIVILIAN_WORD;
+    words[seat] = undercover ? pair.undercover : pair.civilian;
   });
   return {
     gameType: "who_is_undercover",
     board: {
       round: 1,
       phase: "clue",
-      alive: [...UNDERCOVER_SEATS],
+      alive: [...activeSeats],
       eliminated: [],
       words,
       roles,
       clues: {},
       votes: {},
     },
-    nextTurn: UNDERCOVER_SEATS[0],
-    status: "waiting",
+    nextTurn: activeSeats[0] || UNDERCOVER_SEATS[0],
+    status: activeSeats.length >= 3 ? "playing" : "waiting",
     moveCount: 0,
   };
 }
@@ -66,9 +137,9 @@ function result(state: UndercoverState): { winner?: Seat | "draw"; reveal?: stri
 export const whoIsUndercoverEngine: GameEngine = {
   gameType: "who_is_undercover",
   seats: UNDERCOVER_SEATS,
-  minPlayers: 4,
+  minPlayers: 3,
   maxPlayers: UNDERCOVER_SEATS.length,
-  rules: { seats: 8, phases: ["clue", "vote"], hiddenWords: true },
+  rules: { seats: 8, phases: ["clue", "vote"], hiddenWords: true, manualStartByOwner: true },
   actionSchema: { type: "action", payload: { action: "clue|vote", text: "string?", target: "string?" } },
 
   initState(): MatchState {
@@ -83,7 +154,12 @@ export const whoIsUndercoverEngine: GameEngine = {
     const action = String((move as UndercoverMove)?.action || "");
     if (!["clue", "vote"].includes(action)) throw new Error("Invalid action");
     if (action === "clue" && !String((move as UndercoverMove)?.text || "").trim()) throw new Error("Clue text is required");
-    if (action === "vote" && !String((move as UndercoverMove)?.target || "").trim()) throw new Error("Vote target is required");
+    if (action === "vote") {
+      const target = String((move as UndercoverMove)?.target || "").trim();
+      if (!target) throw new Error("Vote target is required");
+      if (!s.board.alive.includes(target as Seat)) throw new Error("Vote target is not alive");
+      if (target === seat) throw new Error("Cannot vote for yourself");
+    }
   },
 
   applyMove(state, seat, move): MatchState {
@@ -155,3 +231,7 @@ export const whoIsUndercoverEngine: GameEngine = {
     };
   },
 };
+
+export function initWhoIsUndercoverMatchState(seats: Seat[]): MatchState {
+  return buildState(seats);
+}

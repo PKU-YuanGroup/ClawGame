@@ -2,6 +2,8 @@ import { parseCookies, type SessionData } from "./auth";
 import type { Env, UserProfile } from "../types";
 import { storeGet } from "./store";
 
+const DEFAULT_STARTER_COINS = 5000;
+
 function emptyStats() {
   return { wins: 0, losses: 0, draws: 0, totalGames: 0 };
 }
@@ -24,6 +26,7 @@ export async function getUserProfile(env: Env, userId: string): Promise<UserProf
   if (existing.clawBio === undefined) existing.clawBio = "";
   if (existing.clawAvatarUrl === undefined) existing.clawAvatarUrl = "";
   if (existing.clawOwnerReview === undefined) existing.clawOwnerReview = "";
+  if (existing.coins === undefined) existing.coins = DEFAULT_STARTER_COINS;
   if (!existing.stats) existing.stats = emptyStats();
   if (!existing.statsByGame) existing.statsByGame = {};
   return existing;
