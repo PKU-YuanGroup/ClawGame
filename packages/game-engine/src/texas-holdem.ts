@@ -5,8 +5,8 @@ const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"] 
 const HOLD_EM_SEATS = ["dealer", "small_blind", "big_blind", "utg", "hijack"] as const;
 const SMALL_BLIND = 5;
 const BIG_BLIND = 10;
-const STARTING_STACK = 1000;
-const TOTAL_HANDS = 3;
+const STARTING_STACK = 100;
+const TOTAL_HANDS = 1;
 
 type Card = `${typeof RANKS[number]}${typeof SUITS[number]}`;
 type Street = "preflop" | "flop" | "turn" | "river" | "showdown";
@@ -221,7 +221,10 @@ function startHand(
   const activeSeats = normalizeSeats(seats);
   if (activeSeats.length < 2) return buildWaitingState();
 
-  const deck = deterministicShuffle(`texas-holdem-v2:${handNo}:${activeSeats.join(",")}`);
+  const dealSeed = typeof crypto?.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const deck = deterministicShuffle(`texas-holdem-v3:${handNo}:${activeSeats.join(",")}:${dealSeed}`);
   const playersState: Record<Seat, PlayerState> = {};
   for (const seat of activeSeats) {
     playersState[seat] = {
@@ -297,7 +300,60 @@ function settleMatchWinner(state: HoldemState): { winners: Seat[]; winner: Seat 
   return { winners, winner: winners.length === 1 ? winners[0] : "draw" };
 }
 
+function distributePot(
+  state: HoldemState,
+  contenders: Seat[],
+  handScores?: Record<string, number[]>,
+): Record<Seat, PlayerState> {
+  const settledPlayersState = Object.fromEntries(
+    Object.entries(state.playersState).map(([seat, player]) => [seat, { ...player, cards: [...player.cards] }]),
+  ) as Record<Seat, PlayerState>;
+  const contributions = Object.fromEntries(
+    state.activeSeats.map((seat) => [seat, Math.max(0, Number(state.playersState[seat]?.totalCommitted || 0))]),
+  ) as Record<Seat, number>;
+  const levels = Array.from(new Set(Object.values(contributions).filter((value) => value > 0))).sort((a, b) => a - b);
+  const payoutOrder = state.board.actorOrder.length > 0 ? state.board.actorOrder : state.activeSeats;
+  let previousLevel = 0;
+
+  for (const level of levels) {
+    const participants = state.activeSeats.filter((seat) => contributions[seat] >= level);
+    const potAmount = (level - previousLevel) * participants.length;
+    previousLevel = level;
+    if (potAmount <= 0) continue;
+
+    let potWinners = contenders.filter((seat) => contributions[seat] >= level);
+    if (!potWinners.length) continue;
+
+    if (handScores && potWinners.length > 1) {
+      let bestScore: number[] | null = null;
+      potWinners.forEach((seat) => {
+        const score = handScores[seat];
+        if (!score) return;
+        if (!bestScore || compareScore(score, bestScore) > 0) {
+          bestScore = score;
+        }
+      });
+      if (bestScore) {
+        potWinners = potWinners.filter((seat) => compareScore(handScores[seat] || [], bestScore as number[]) === 0);
+      }
+    }
+
+    const orderedWinners = payoutOrder.filter((seat) => potWinners.includes(seat));
+    const winners = orderedWinners.length > 0 ? orderedWinners : potWinners;
+    const share = Math.floor(potAmount / winners.length);
+    const remainder = potAmount % winners.length;
+    winners.forEach((seat, index) => {
+      const player = settledPlayersState[seat];
+      if (!player) return;
+      player.stack += share + (index < remainder ? 1 : 0);
+    });
+  }
+
+  return settledPlayersState;
+}
+
 function settleHand(state: HoldemState, winners: Seat[], label: string, finishReason: string): HoldemState {
+  const settledPlayersState = distributePot(state, winners);
   const nextWins = { ...state.matchWins };
   for (const seat of winners) {
     nextWins[seat] = Number(nextWins[seat] || 0) + 1;
@@ -309,6 +365,7 @@ function settleHand(state: HoldemState, winners: Seat[], label: string, finishRe
       status: "finished" as const,
       board: { ...state.board, street: "showdown" as Street },
       matchWins: nextWins,
+      playersState: settledPlayersState,
       finishReason,
       winnerSummary: { winners: [...winners], label },
     };
@@ -359,7 +416,44 @@ function advanceQueue(state: HoldemState): HoldemState {
       const best = scores[0];
       const winners = scores.filter((item) => compareScore(item.hand.score, best.hand.score) === 0).map((item) => item.seat);
       s.board.street = "showdown";
-      return settleHand(s, winners, best.hand.label, "showdown");
+      const settledPlayersState = distributePot(
+        s,
+        remaining,
+        Object.fromEntries(scores.map((item) => [item.seat, item.hand.score])),
+      );
+      const nextWins = { ...s.matchWins };
+      for (const seat of winners) {
+        nextWins[seat] = Number(nextWins[seat] || 0) + 1;
+      }
+
+      if (s.board.handNo >= s.board.totalHands) {
+        const settled = {
+          ...s,
+          status: "finished" as const,
+          board: { ...s.board, street: "showdown" as Street },
+          matchWins: nextWins,
+          playersState: settledPlayersState,
+          finishReason: "showdown",
+          winnerSummary: { winners: [...winners], label: best.hand.label },
+        };
+        const match = settleMatchWinner(settled);
+        settled.winner = match.winner;
+        settled.nextTurn = match.winners[0] || settled.nextTurn;
+        return settled;
+      }
+
+      return {
+        ...s,
+        status: "playing" as const,
+        board: { ...s.board, street: "showdown" as Street },
+        nextTurn: "",
+        actionQueue: [],
+        matchWins: nextWins,
+        playersState: settledPlayersState,
+        winnerSummary: { winners: [...winners], label: best.hand.label },
+        finishReason: "showdown",
+        winner: undefined,
+      };
     }
 
     while (s.board.community.length < nextCommunityCount(s.board.street)) {
@@ -538,7 +632,7 @@ export const texasHoldemEngine: GameEngine = {
 
   snapshot(state) {
     if (!isHoldemState(state)) return state;
-    const s = state;
+    const s = cloneState(state);
     return {
       ...s,
       theme: "casino-noir",

@@ -3,6 +3,7 @@ import type { MatchPlayer, MatchState, Seat } from "./games/types";
 import type { Env, UserProfile } from "./types";
 import type { ProtocolEnvelope, RoomCommandRequest, RoomCommandResponse } from "@openclaw/game-protocol";
 import { storeDelete, storeGet, storePut } from "./lib/store";
+import { getUserProfile } from "./lib/user";
 import {
   AGENT_IDLE_TTL_MS,
   BOT_MOVE_DELAY_MS,
@@ -64,8 +65,8 @@ interface WsMeta {
 
 const PARTICIPANT_PRESENCE_TTL_MS = 30_000;
 const TEXAS_SHOWDOWN_PAUSE_MS = 10_000;
-const WIN_REWARD_COINS = 100;
 const TEXAS_ENTRY_COINS = 100;
+const TEXAS_STACK_PER_COIN = 1;
 
 export class GameRoomDO {
   private sockets = new Map<WebSocket, WsMeta>();
@@ -373,6 +374,13 @@ export class GameRoomDO {
         meta.role = "player";
       }
       this.sockets.set(ws, meta);
+      ws.send(JSON.stringify(this.envelope(data, "sync_state", this.toSnapshot(data, joined.seat))));
+      if (data.state.status === "playing" && data.state.nextTurn === joined.seat) {
+        ws.send(JSON.stringify(this.envelope(data, "your_turn", {
+          seat: joined.seat,
+          legalAction: getEngine(data.gameType).actionSchema,
+        })));
+      }
       ws.send(JSON.stringify(this.envelope(data, "action_result", {
         kind: "join_game",
         ok: true,
@@ -627,6 +635,8 @@ export class GameRoomDO {
     }
 
     data.state = this.initMatchStateForSeats(data.gameType, seats);
+    this.ensureNextTurnAfterStart(data);
+    this.resetTurnClockForNext(data);
     delete (data.state as any).settlementPlayers;
     this.clearDefaultRoomAutoReset(data);
     data.eventSeq = (data.eventSeq || 0) + 1;
@@ -637,6 +647,7 @@ export class GameRoomDO {
     await this.save(data);
     this.broadcast(data, "state_update", this.toSnapshot(data));
     this.broadcast(data, "online_update", this.currentOnline(data));
+    this.broadcastTurnPrompt(data);
     ws.send(JSON.stringify(this.envelope(data, "action_result", { kind: "start_game", ok: true })));
     void this.runBotTurns(data);
   }
@@ -912,6 +923,35 @@ export class GameRoomDO {
     clock.turnStartedAt = Date.now();
   }
 
+  private ensureNextTurnAfterStart(data: RoomData): void {
+    const state: any = data.state as any;
+    if (String(state?.status || "") !== "playing") return;
+    const currentNextTurn = String(state?.nextTurn || "");
+
+    if (data.gameType === "texas_holdem") {
+      const activeSeats = Array.isArray(state?.activeSeats) ? state.activeSeats.map((seat: unknown) => String(seat || "")).filter(Boolean) : [];
+      const queueSeat = Array.isArray(state?.actionQueue) ? String(state.actionQueue[0] || "") : "";
+      if (currentNextTurn && activeSeats.includes(currentNextTurn)) return;
+      state.nextTurn = queueSeat || activeSeats[0] || "";
+      return;
+    }
+
+    if (currentNextTurn) return;
+    const occupiedSeat = Array.from(new Set(data.players.map((p) => String(p.seat || "")).filter(Boolean)))[0] || "";
+    state.nextTurn = occupiedSeat;
+  }
+
+  private repairPlayingTurnState(data: RoomData): boolean {
+    const beforeNextTurn = String((data.state as any)?.nextTurn || "");
+    const beforeTurnStartedAt = Number((data.state as any)?.clock?.turnStartedAt || 0);
+    this.ensureNextTurnAfterStart(data);
+    if (String((data.state as any)?.status || "") !== "playing") return false;
+    this.resetTurnClockForNext(data);
+    const afterNextTurn = String((data.state as any)?.nextTurn || "");
+    const afterTurnStartedAt = Number((data.state as any)?.clock?.turnStartedAt || 0);
+    return beforeNextTurn !== afterNextTurn || beforeTurnStartedAt !== afterTurnStartedAt;
+  }
+
   private moveAllPlayersToSpectators(data: RoomData): void {
     const state: any = data.state as any;
     if (data.players.length > 0) {
@@ -944,6 +984,28 @@ export class GameRoomDO {
     if (String(state?.status || "") !== "finished") return;
     if (state.coinRewardGranted) return;
 
+    if (data.gameType === "texas_holdem") {
+      const settlementPlayers = Array.isArray(state?.settlementPlayers) ? state.settlementPlayers : [];
+      const playersState = state?.playersState && typeof state.playersState === "object" ? state.playersState : {};
+      const seenUserIds = new Set<string>();
+      for (const participant of [...data.players, ...settlementPlayers]) {
+        const seat = String((participant as any)?.seat || "");
+        if (!seat) continue;
+        const userId = this.normalizeParticipantId(String((participant as any)?.id || ""));
+        if (!userId || userId.startsWith("guest") || this.isBotParticipantId(userId) || seenUserIds.has(userId)) continue;
+        const stack = Number(playersState?.[seat]?.stack ?? 0);
+        const payoutCoins = Math.max(0, Math.floor(stack / TEXAS_STACK_PER_COIN));
+        const profile = await getUserProfile(this.env, userId).catch(() => null);
+        if (!profile) continue;
+        profile.coins = Number(profile.coins || 0) + payoutCoins;
+        profile.updatedAt = Date.now();
+        await storePut(this.env, `user:${userId}`, JSON.stringify(profile));
+        seenUserIds.add(userId);
+      }
+      state.coinRewardGranted = true;
+      return;
+    }
+
     const winnerSeat = String(state?.winner || "");
     if (!winnerSeat || winnerSeat === "draw") {
       state.coinRewardGranted = true;
@@ -968,7 +1030,7 @@ export class GameRoomDO {
       return;
     }
 
-    profile.coins = Number(profile.coins || 0) + WIN_REWARD_COINS;
+    profile.coins = Number(profile.coins || 0) + 100;
     profile.updatedAt = Date.now();
     await storePut(this.env, `user:${winnerUserId}`, JSON.stringify(profile));
     state.coinRewardGranted = true;
@@ -995,8 +1057,7 @@ export class GameRoomDO {
 
     const profiles = new Map<string, UserProfile>();
     for (const userId of userIds) {
-      const profile = (await storeGet(this.env, `user:${userId}`, "json")) as UserProfile | null;
-      if (!profile) throw new Error(`player profile not found: ${userId}`);
+      const profile = await getUserProfile(this.env, userId);
       const coins = Number(profile.coins || 0);
       if (coins < TEXAS_ENTRY_COINS) {
         const displayName = profile.nickname || profile.username || profile.name || profile.login || userId;
@@ -1015,8 +1076,7 @@ export class GameRoomDO {
   private async ensureTexasJoinCoins(playerId: string): Promise<void> {
     const userId = this.normalizeParticipantId(playerId);
     if (!userId || userId.startsWith("guest") || this.isBotParticipantId(userId)) return;
-    const profile = (await storeGet(this.env, `user:${userId}`, "json")) as UserProfile | null;
-    if (!profile) throw new Error("player profile not found");
+    const profile = await getUserProfile(this.env, userId);
     if (Number(profile.coins || 0) < TEXAS_ENTRY_COINS) {
       throw new Error("not enough coins to join texas hold'em");
     }
@@ -1142,30 +1202,9 @@ export class GameRoomDO {
     data.players.push({ id: playerId, seat, token });
     if (playerId.startsWith("openclaw:")) data.agentLastSeenAt = Date.now();
 
-    const readyParticipants = this.readyParticipantCount(data);
-    const hasRequiredNonHuman = this.hasOpenclawOrBotParticipant(data);
-    const canAutoStart = !this.isManualStartGame(data.gameType);
-    if (
-      canAutoStart
-      && readyParticipants >= this.gameMinParticipants(data.gameType)
-      && hasRequiredNonHuman
-      && data.state.status === "waiting"
-    ) {
-      data.state.status = "playing";
-      delete (data.state as any).settlementPlayers;
-      this.clearDefaultRoomAutoReset(data);
-      const clock = this.ensureClockState(data);
-      clock.turnStartedAt = Date.now();
-      const systemMsg = this.addSystemChat(data, "Game started. Public chat window opened for OpenClaw banter.");
-      if (systemMsg) this.broadcast(data, "chat", systemMsg);
-    }
-
     await this.save(data);
     this.broadcast(data, "state_update", this.toSnapshot(data));
     this.broadcast(data, "online_update", this.currentOnline(data));
-    if ((data.state as any).status === "playing") {
-      void this.runBotTurns(data);
-    }
     return { playerToken: token, seat };
   }
 
@@ -1951,6 +1990,16 @@ export class GameRoomDO {
     if (this.pruneInactiveAgent(data)) {
       await this.save(data);
     }
+    const rawState: any = data.state as any;
+    const activeSeats = Array.isArray(rawState?.activeSeats) ? rawState.activeSeats.map((seat: unknown) => String(seat || "")).filter(Boolean) : [];
+    const nextTurn = String(rawState?.nextTurn || "");
+    const needsTurnRepair = String(rawState?.status || "") === "playing"
+      && (!nextTurn || (data.gameType === "texas_holdem" && activeSeats.length > 0 && !activeSeats.includes(nextTurn)));
+    if (needsTurnRepair) {
+      if (this.repairPlayingTurnState(data)) {
+        await this.save(data);
+      }
+    }
     return data;
   }
 
@@ -2020,7 +2069,8 @@ export class GameRoomDO {
   }
 
   private isManualStartGame(gameType: string): boolean {
-    return Boolean(getEngine(gameType)?.rules?.manualStartByOwner);
+    void gameType;
+    return true;
   }
 
   private initMatchStateForSeats(gameType: string, seats: Seat[]): MatchState {

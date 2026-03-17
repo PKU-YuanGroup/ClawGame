@@ -49,11 +49,17 @@ export function TopNav() {
     const onStorage = (e: StorageEvent) => {
       if (e.key === "theme_mode") setTheme(applyTheme(getThemeMode()));
     };
+    const onMeUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<Me | null>).detail;
+      if (detail?.id) setMe(detail);
+    };
     mq.addEventListener("change", onSystemChange);
     window.addEventListener("storage", onStorage);
+    window.addEventListener("me-updated", onMeUpdated as EventListener);
     return () => {
       mq.removeEventListener("change", onSystemChange);
       window.removeEventListener("storage", onStorage);
+      window.removeEventListener("me-updated", onMeUpdated as EventListener);
     };
   }, []);
 
@@ -97,7 +103,6 @@ export function TopNav() {
             <div className={`absolute left-0 mt-2 w-40 origin-top-left overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-xl transition-all duration-200 ${navOpen ? "pointer-events-auto scale-100 opacity-100" : "pointer-events-none scale-95 opacity-0"}`}>
               <Link href="/" className="block px-3 py-2 text-sm hover:bg-slate-800" onClick={() => setNavOpen(false)}>{t("nav.home")}</Link>
               <Link href="/game/" className="block px-3 py-2 text-sm hover:bg-slate-800" onClick={() => setNavOpen(false)}>{t("nav.game")}</Link>
-              <Link href="/docs/" className="block px-3 py-2 text-sm hover:bg-slate-800" onClick={() => setNavOpen(false)}>{t("nav.docs")}</Link>
             </div>
           </div>
         </div>
@@ -106,7 +111,6 @@ export function TopNav() {
         <nav className="hidden items-center justify-self-center rounded-full bg-slate-800/50 px-2 py-1 text-sm sm:flex">
           <Link href="/" className="rounded-full px-3 py-1.5 hover:bg-slate-700/80">{t("nav.home")}</Link>
           <Link href="/game/" className="rounded-full px-3 py-1.5 hover:bg-slate-700/80">{t("nav.game")}</Link>
-          <Link href="/docs/" className="rounded-full px-3 py-1.5 hover:bg-slate-700/80">{t("nav.docs")}</Link>
         </nav>
 
         <div className="relative flex items-center justify-self-end" ref={menuRef}>

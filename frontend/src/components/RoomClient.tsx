@@ -272,6 +272,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const [wsLatencyMs, setWsLatencyMs] = useState<number | null>(null);
   const [wsPacketLossPct, setWsPacketLossPct] = useState(0);
   const [playerToken, setPlayerToken] = useState("");
+  const [playerSeat, setPlayerSeat] = useState("");
   const [joining, setJoining] = useState(false);
   const [openclawJoining, setOpenclawJoining] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -304,6 +305,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const pingAckRef = useRef(0);
   const pingLostRef = useRef(0);
   const wsConnectingRef = useRef(false);
+  const profileRequestsRef = useRef<Set<string>>(new Set());
 
   function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -316,8 +318,27 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
         .catch((err) => {
           window.clearTimeout(timer);
           reject(err);
-        });
+      });
     });
+  }
+
+  async function fetchRoomState(targetRoomId: string): Promise<any> {
+    return await api<any>(`/api/room/state?roomId=${encodeURIComponent(targetRoomId)}`);
+  }
+
+  async function refreshMeProfile(): Promise<void> {
+    try {
+      const nextMe = await api<Me>("/api/me");
+      setMe(nextMe || null);
+      if (nextMe?.id) {
+        localStorage.setItem(ME_CACHE_KEY, JSON.stringify(nextMe));
+        window.dispatchEvent(new CustomEvent("me-updated", { detail: nextMe }));
+      } else {
+        localStorage.removeItem(ME_CACHE_KEY);
+      }
+    } catch {
+      // ignore profile refresh failures; room state remains usable
+    }
   }
 
   useEffect(() => {
@@ -411,7 +432,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
 
     async function probeRoomState(): Promise<boolean> {
       try {
-        const state = await api<any>(`/api/room/state?roomId=${encodeURIComponent(roomId)}`);
+        const state = await fetchRoomState(roomId);
         if (cancelled) return false;
         setSnapshot(state || null);
         setRoomMissing(false);
@@ -599,8 +620,13 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
                 window.clearTimeout(joinGameTimerRef.current);
                 joinGameTimerRef.current = null;
               }
+              if (!payload.ok) {
+                pushToast(String(payload.error || t("room.toastJoinGameFailed")), "error");
+              }
               if (payload.ok && payload.playerToken) {
                 setPlayerToken(String(payload.playerToken));
+                setPlayerSeat(String(payload.seat || ""));
+                void refreshRoomPresence();
               }
             }
             if (payload.kind === "leave_game") {
@@ -611,6 +637,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
               }
               if (payload.ok) {
                 setPlayerToken("");
+                setPlayerSeat("");
                 setText("");
               }
             }
@@ -676,6 +703,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
             setMoveHistory([]);
             const payload = (m.payload || {}) as any;
             setGameOverWinner(String(payload?.winner || "draw"));
+            void refreshMeProfile();
           }
           if (eventType === "chat_history") {
             const p = (m.payload || {}) as { messages?: ChatMessage[] };
@@ -769,13 +797,22 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
         ...moveHistory.map((m) => ({ id: m.actorId || "" })),
       ]
         .map((u: any) => normalizeProfileId(u.id))
-        .filter((id) => id && id !== "system" && !id.startsWith("guest") && (!profiles[id] || !Array.isArray(profiles[id]?.badgeDetails)))),
+        .filter((id) => {
+          if (!id || id === "system" || id.startsWith("guest")) return false;
+          if (profiles[id]) return false;
+          if (profileRequestsRef.current.has(id)) return false;
+          return true;
+        })),
     );
     if (!ids.length) return;
     ids.forEach((id) => {
+      profileRequestsRef.current.add(id);
       api(`/api/profile?userId=${encodeURIComponent(id)}`)
         .then((p: any) => setProfiles((prev) => ({ ...prev, [id]: p || { id } })))
-        .catch(() => setProfiles((prev) => ({ ...prev, [id]: { id } })));
+        .catch(() => setProfiles((prev) => ({ ...prev, [id]: { id } })))
+        .finally(() => {
+          profileRequestsRef.current.delete(id);
+        });
     });
   }, [online, chat, snapshot, moveHistory, profiles]);
 
@@ -1071,7 +1108,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   async function refreshRoomPresence() {
     try {
       const [state, onlineRes] = await Promise.all([
-        api<any>(`/api/room/state?roomId=${encodeURIComponent(roomId)}`),
+        fetchRoomState(roomId),
         api<any>(`/api/room/online?roomId=${encodeURIComponent(roomId)}`),
       ]);
       if (state) setSnapshot(state);
@@ -1083,6 +1120,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
           spectators: Array.isArray(onlineRes?.spectators) ? onlineRes.spectators : [],
         });
       }
+      void refreshMeProfile();
     } catch (err) {
       const message = err instanceof Error ? err.message.toLowerCase() : String(err || "").toLowerCase();
       if (message.includes("room not found") || message.includes("not found") || message.includes("http 404")) {
@@ -1217,18 +1255,16 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
         .map((p: { seat: string; userId: string }) => [p.seat, p.userId] as const),
     ).values()) as string[]
     : [];
-  const texasEntryTotalCoins = texasEntrySeatUsers.length * TEXAS_ENTRY_COINS;
   const myCoins = Number(me?.coins ?? profiles[me?.id || ""]?.coins ?? 0);
-  const texasEntryInsufficientUsers = texasEntrySeatUsers.filter((userId) => Number(profiles[userId]?.coins ?? (userId === me?.id ? myCoins : NaN)) < TEXAS_ENTRY_COINS);
-  const texasEntryInsufficientNames = texasEntryInsufficientUsers.map((userId) => displayNameById(userId)).filter(Boolean);
   const canJoinTexasByCoins = gameType !== "texas_holdem" || myCoins >= TEXAS_ENTRY_COINS;
+  const generalSeatCount = Array.from(new Set(
+    (Array.isArray(snapshot?.players) ? snapshot.players : [])
+      .map((p: any) => String(p?.seat || ""))
+      .filter(Boolean),
+  )).length;
   const canStartManualGame = isOwner
     && statusText === "waiting"
-    && (
-      (gameType === "texas_holdem" && texasSeatCount >= 2)
-      || (gameType === "who_is_undercover" && texasSeatCount >= 3 && texasSeatCount <= 8)
-      || (gameType === "uno" && texasSeatCount >= 2 && texasSeatCount <= 4)
-    );
+    && generalSeatCount >= 2;
   const isGameFinished = statusText === "finished" || Boolean((gameState as any)?.winner) || Boolean(gameOverWinner);
   const autoResetAt = Number((gameState as any)?.autoResetAt || (snapshot as any)?.autoResetAt || 0);
   const isDefaultAutoResetRoom = autoResetAt > 0;
@@ -1242,12 +1278,26 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const werewolfAliveSeats = Array.isArray((gameState as any)?.board?.alive) ? ((gameState as any).board.alive as string[]) : [];
   const undercoverAliveSeats = Array.isArray((gameState as any)?.board?.alive) ? ((gameState as any).board.alive as string[]) : [];
   const mySeat = String(
-    (Array.isArray(snapshot?.players) ? snapshot.players : []).find((p: any) => String(p?.id || "") === myUserId)?.seat || "",
+    playerSeat
+      || (Array.isArray(snapshot?.players) ? snapshot.players : []).find((p: any) => String(p?.id || "") === myUserId)?.seat
+      || "",
   );
   const undercoverBoard = ((gameState as any)?.board || {}) as any;
   const myUndercoverWord = String(undercoverBoard?.myWord || undercoverBoard?.words?.[mySeat] || "");
   const myUndercoverRole = String(undercoverBoard?.myRole || "");
   const myUndercoverWordLabel = myUndercoverWord ? t(`room.undercoverWords.${myUndercoverWord}`) : "";
+  const showUndercoverRole = statusText === "finished";
+  const undercoverWordStatus = myUndercoverWordLabel
+    || (statusText === "waiting"
+      ? (lang === "zh" ? "等待房主开始游戏" : "Waiting for owner to start")
+      : joinedAsPlayer
+        ? (lang === "zh" ? "正在同步你的私有词条" : "Syncing your private word")
+        : (lang === "zh" ? "加入游戏后可见" : "Join the game to reveal"));
+  const undercoverRoleStatus = showUndercoverRole && myUndercoverRole
+    ? (myUndercoverRole === "undercover" ? (lang === "zh" ? "卧底" : "Undercover") : (lang === "zh" ? "平民" : "Civilian"))
+    : (statusText === "finished"
+      ? (lang === "zh" ? "正在同步身份" : "Syncing role")
+      : (lang === "zh" ? "对局结束后揭晓" : "Revealed after the game"));
   const isMyTurn = Boolean(mySeat) && turnText === mySeat;
   const canActNow = canSubmitMove && isMyTurn;
   const moveDisabledReason = !joinedAsPlayer
@@ -1288,7 +1338,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
     return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
   };
   const seatRemainMs = (seat: string) => {
-    const base = Number(clockRemaining?.[seat] ?? 60_000);
+    const base = Number(clockRemaining?.[seat] ?? 90_000);
     if (statusText === "playing" && turnSeat === seat && turnStartedAt > 0) {
       return base - (nowTs - turnStartedAt);
     }
@@ -1373,7 +1423,9 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
   const texasBigBlindSeat = texasButtonIndex >= 0 && texasActiveSeats.length > 0
     ? texasActiveSeats[(texasButtonIndex + (texasActiveSeats.length === 2 ? 1 : 2)) % texasActiveSeats.length]
     : "";
-  const myTexasCards = Array.isArray(texasPlayersState?.[mySeat]?.cards) ? (texasPlayersState[mySeat].cards as string[]) : [];
+  const myTexasCards = Array.isArray(texasPlayersState?.[mySeat]?.cards)
+    ? (texasPlayersState[mySeat].cards as string[]).filter((card) => Boolean(String(card || "").trim()))
+    : [];
   const texasCommunityCards = Array.isArray(texasState?.board?.community) ? (texasState.board.community as string[]) : [];
   const texasCommunitySlots = Array.from({ length: 5 }, (_, index) => texasCommunityCards[index] || "");
   const texasSeatCards = (seat: string) => Array.isArray(texasPlayersState?.[seat]?.cards) ? (texasPlayersState[seat].cards as string[]) : [];
@@ -1392,7 +1444,7 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
       avatar: playerId ? avatarById(playerId, senderType) : DEFAULT_AVATAR,
       stack,
       committed,
-      cards: texasSeatCards(seat),
+      cards: texasSeatCards(seat).filter((card) => Boolean(String(card || "").trim())),
       isTurn: turnText === seat,
       isButton: seat === texasButtonSeat,
       isSmallBlind: seat === texasSmallBlindSeat,
@@ -1428,6 +1480,17 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
       return { seat, id, cards };
     })
     .filter(Boolean) as Array<{ seat: string; id: string; cards: string[] }>;
+  const texasTurnPlayerId = String(participantBySeat[turnText] || settlementParticipantBySeat[turnText] || "");
+  const texasTurnPlayerName = turnText !== "-" && texasTurnPlayerId
+    ? displayNameById(texasTurnPlayerId, inferSenderTypeById(texasTurnPlayerId))
+    : "";
+  const texasTurnStatus = turnText === "-"
+    ? (lang === "zh" ? "等待房主开始" : "Waiting for owner to start")
+    : canActNow
+      ? (lang === "zh" ? "轮到你行动" : "Your action")
+      : texasTurnPlayerName
+        ? ((lang === "zh" ? "等待 " : "Waiting for ") + `${texasTurnPlayerName} (${turnText})`)
+        : `${lang === "zh" ? "当前回合" : "Current turn"}: ${turnText}`;
   const texasWinnerLabel = texasShowdownWinnerSeats.length > 0
     ? texasShowdownWinnerSeats
       .map((seat) => displayNameById(participantBySeat[seat] || settlementParticipantBySeat[seat], inferSenderTypeById(participantBySeat[seat] || settlementParticipantBySeat[seat])) || seat)
@@ -2279,7 +2342,23 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
                       <div key={`community_${idx}`}>{card ? renderTexasCardSvg(card, false) : renderTexasCardPlaceholder(false, idx < 3 ? "FLOP" : idx === 3 ? "TURN" : "RIVER")}</div>
                     ))}
                   </div>
-                  <div className="absolute left-1/2 top-1/2 w-[min(92%,19rem)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border px-4 py-3 text-center text-sm" style={{ borderColor: "rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.08)", color: "#f6f1dd" }}>
+                  <div
+                    className="absolute left-1/2 top-[48%] w-[min(92%,24rem)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border px-4 py-3 text-center"
+                    style={{
+                      borderColor: canActNow ? "rgba(74,222,128,0.34)" : "rgba(255,255,255,0.14)",
+                      background: canActNow ? "rgba(6,78,59,0.55)" : "rgba(255,255,255,0.08)",
+                      color: "#f6f1dd",
+                      boxShadow: canActNow ? "0 0 0 1px rgba(74,222,128,0.12)" : "none",
+                    }}
+                  >
+                    <div className="text-[11px] uppercase tracking-[0.22em]" style={{ color: canActNow ? "#a7f3d0" : "rgba(255,241,221,0.66)" }}>
+                      {lang === "zh" ? "当前回合" : "Current Turn"}
+                    </div>
+                    <div className="mt-1 text-base font-semibold">
+                      {texasTurnStatus}
+                    </div>
+                  </div>
+                  <div className="absolute left-1/2 top-[63%] w-[min(92%,19rem)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border px-4 py-3 text-center text-sm" style={{ borderColor: "rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.08)", color: "#f6f1dd" }}>
                     <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: "rgba(255,241,221,0.66)" }}>Your Hand</div>
                     <div className="mt-3 flex justify-center gap-2">
                       {myTexasCards.length ? myTexasCards.map((card, idx) => (
@@ -2411,13 +2490,13 @@ export function RoomClient({ roomId, gameTypeHint = "" }: { roomId: string; game
                   <div className="text-sm" style={{ color: "rgba(255,241,246,0.72)" }}>Round {Number((gameState as any)?.board?.round || 1)}</div>
                 </div>
                 <div className="mb-4 grid gap-3 md:grid-cols-2">
-                  <div className="rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff1f6" }}>
-                    <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: "rgba(255,241,246,0.66)" }}>{lang === "zh" ? "你的关键词" : "Your Keyword"}</div>
-                    <div className="mt-1 text-lg font-semibold">{myUndercoverWordLabel || (lang === "zh" ? "等待房主开始游戏" : "Waiting for owner to start")}</div>
+                    <div className="rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff1f6" }}>
+                      <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: "rgba(255,241,246,0.66)" }}>{lang === "zh" ? "你的关键词" : "Your Keyword"}</div>
+                    <div className="mt-1 text-lg font-semibold">{undercoverWordStatus}</div>
                   </div>
                   <div className="rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff1f6" }}>
                     <div className="text-[11px] uppercase tracking-[0.2em]" style={{ color: "rgba(255,241,246,0.66)" }}>{lang === "zh" ? "你的身份" : "Your Role"}</div>
-                    <div className="mt-1 text-lg font-semibold">{myUndercoverRole ? (myUndercoverRole === "undercover" ? (lang === "zh" ? "卧底" : "Undercover") : (lang === "zh" ? "平民" : "Civilian")) : "-"}</div>
+                    <div className="mt-1 text-lg font-semibold">{undercoverRoleStatus}</div>
                   </div>
                 </div>
                 <div className="mb-4 rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.08)", color: "#fff1f6" }}>

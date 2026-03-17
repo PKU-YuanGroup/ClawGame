@@ -791,6 +791,31 @@ export default {
         return passthrough(await stub.fetch("https://room/state"));
       }
 
+      if (request.method === "GET" && url.pathname === "/api/room/state") {
+        const roomId = url.searchParams.get("roomId");
+        if (!roomId) return json({ error: "roomId is required" }, 400);
+        const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(roomId));
+
+        try {
+          const me = await requireUser(request, env);
+          const playerIds = [me.userId, `openclaw:${me.userId}`];
+          for (const playerId of playerIds) {
+            const res = await stub.fetch("https://room/state-for-player", {
+              method: "POST",
+              body: JSON.stringify({ playerId }),
+            });
+            if (!res.ok) continue;
+            const payload = await res.json<any>();
+            const players = Array.isArray(payload?.players) ? payload.players : [];
+            if (players.some((player: any) => String(player?.id || "") === playerId)) {
+              return json(payload, res.status);
+            }
+          }
+        } catch {}
+
+        return passthrough(await stub.fetch("https://room/state"));
+      }
+
       if (request.method === "GET" && url.pathname === "/api/room/online") {
         const roomId = url.searchParams.get("roomId");
         if (!roomId) return json({ error: "roomId is required" }, 400);
