@@ -61,6 +61,25 @@ function checkWinner(state: WerewolfState): { winner?: Seat | "draw"; status: Ma
   return { status: "playing" };
 }
 
+function buildState(seats: Seat[] = []): WerewolfState {
+  const activeSeats = seats.length > 0 ? [...seats] : [...WEREWOLF_SEATS];
+  return {
+    gameType: "werewolf",
+    board: {
+      phase: "night",
+      round: 1,
+      alive: [...activeSeats],
+      eliminated: [],
+      rolesAssigned: true,
+      votes: {},
+      roleMap: buildRoles(activeSeats),
+    },
+    nextTurn: activeSeats[0] || WEREWOLF_SEATS[0],
+    status: activeSeats.length >= 5 ? "playing" : "waiting",
+    moveCount: 0,
+  };
+}
+
 export const werewolfEngine: GameEngine = {
   gameType: "werewolf",
   seats: WEREWOLF_SEATS,
@@ -70,22 +89,7 @@ export const werewolfEngine: GameEngine = {
   actionSchema: { type: "action", payload: { action: "night_kill|inspect|save|vote|ready", target: "string?" } },
 
   initState(): MatchState {
-    const state: WerewolfState = {
-      gameType: "werewolf",
-      board: {
-        phase: "night",
-        round: 1,
-        alive: [...WEREWOLF_SEATS],
-        eliminated: [],
-        rolesAssigned: true,
-        votes: {},
-        roleMap: buildRoles([...WEREWOLF_SEATS]),
-      },
-      nextTurn: "alpha",
-      status: "waiting",
-      moveCount: 0,
-    };
-    return state;
+    return buildState();
   },
 
   validateMove(state, seat, move): void {
@@ -193,3 +197,7 @@ export const werewolfEngine: GameEngine = {
     };
   },
 };
+
+export function initWerewolfMatchState(seats: Seat[]): MatchState {
+  return buildState(seats);
+}

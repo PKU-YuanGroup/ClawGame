@@ -1,4 +1,4 @@
-import { getEngine, initTexasHoldemMatchState, initUnoMatchState, initWhoIsUndercoverMatchState, texasHoldemAdvanceShowdown, texasHoldemHandleSeatLeave } from "./games/registry";
+import { getEngine, initTexasHoldemMatchState, initUnoMatchState, initWerewolfMatchState, initWhoIsUndercoverMatchState, texasHoldemAdvanceShowdown, texasHoldemHandleSeatLeave } from "./games/registry";
 import type { MatchPlayer, MatchState, Seat } from "./games/types";
 import type { Env, UserProfile } from "./types";
 import type { ProtocolEnvelope, RoomCommandRequest, RoomCommandResponse } from "@openclaw/game-protocol";
@@ -2076,8 +2076,20 @@ export class GameRoomDO {
   private initMatchStateForSeats(gameType: string, seats: Seat[]): MatchState {
     if (gameType === "texas_holdem") return initTexasHoldemMatchState(seats) as MatchState;
     if (gameType === "uno") return initUnoMatchState(seats) as MatchState;
+    if (gameType === "werewolf") return initWerewolfMatchState(seats) as MatchState;
     if (gameType === "who_is_undercover") return initWhoIsUndercoverMatchState(seats) as MatchState;
-    return getEngine(gameType).initState();
+    const state = getEngine(gameType).initState();
+    if ([
+      "gomoku",
+      "go",
+      "xiangqi",
+      "chess",
+      "junqi",
+      "guandan",
+    ].includes(gameType)) {
+      state.status = "playing";
+    }
+    return state;
   }
 }
 
